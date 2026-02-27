@@ -44,6 +44,7 @@ def refresh_emails() -> None:
         )
         fetched_emails = result.get("emails", [])
         safe_emails: list[dict[str, Any]] = []
+        risk_eval_failures = 0
 
         for email in fetched_emails:
             try:
@@ -51,10 +52,11 @@ def refresh_emails() -> None:
                 if evaluation.get("decision") == "deliver":
                     safe_emails.append(email)
             except requests.RequestException:
-                # Risk service failures should not fully block inbox rendering.
-                safe_emails.append(email)
+                # Fail closed: keep email out of inbox when risk verdict is unavailable.
+                risk_eval_failures += 1
 
         st.session_state.safe_emails = safe_emails
+        st.session_state.risk_eval_failures = risk_eval_failures
 
         quarantine_result = api_get("/risk/quarantine")
         st.session_state.quarantine_emails = quarantine_result.get("emails", [])
@@ -80,6 +82,8 @@ if "quarantine_emails" not in st.session_state:
     st.session_state.quarantine_emails = []
 if "delete_confirm_id" not in st.session_state:
     st.session_state.delete_confirm_id = ""
+if "risk_eval_failures" not in st.session_state:
+    st.session_state.risk_eval_failures = 0
 
 col_left, col_right = st.columns([1, 1])
 
@@ -130,6 +134,10 @@ inbox_tab, quarantine_tab = st.tabs(["Inbox", "Quarantine"])
 with inbox_tab:
     st.subheader("Inbox")
     emails = st.session_state.safe_emails
+    if st.session_state.risk_eval_failures:
+        st.warning(
+            f"{st.session_state.risk_eval_failures} email(s) were hidden because risk evaluation failed."
+        )
     if not emails:
         st.info("No safe emails loaded. Click 'Refresh Inbox'.")
     else:

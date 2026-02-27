@@ -23,7 +23,24 @@ class RiskRulesTests(unittest.TestCase):
         self.assertIn("credential_phishing_pattern", reasons)
         self.assertIn("urgency_language", reasons)
 
+    def test_detects_bonus_payout_lure_and_random_sender_patterns(self) -> None:
+        email = {
+            "id": "msg-3",
+            "thread_id": "thread-3",
+            "from_email": "gsqsxezcvh <xgejztwlnpkrok.505@drz8ov.yklc8d.dmxmsq.us>",
+            "to_email": "user@example.com",
+            "subject": "Final Notice: 2500 payout and 300 free spins",
+            "body": "2500 bonus offer. No deposit. Promo code WELCOME100. Pending verification.",
+            "send_time": "Fri, 27 Feb 2026 12:00:00 +0000",
+        }
+
+        features = extract_features(email)
+        score, reasons, _ = score_features(features)
+
+        self.assertGreaterEqual(score, 0.65)
+        self.assertIn("promo_lure_pattern", reasons)
+        self.assertIn("suspicious_sender_domain_structure", reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -27,11 +27,27 @@ def decision_from_score(risk_score: float, threshold: float) -> str:
     return "quarantine" if risk_score >= threshold else "deliver"
 
 
+def normalize_decision_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"rules_only", "hybrid", "llm_only"}:
+        return normalized
+    return "hybrid"
+
+
 class EmailRiskGraph:
-    def __init__(self, threshold: float, model_version: str, llm_scorer: RiskLLMScorer) -> None:
+    def __init__(
+        self,
+        threshold: float,
+        model_version: str,
+        llm_scorer: RiskLLMScorer,
+        decision_mode: str = "hybrid",
+        fail_closed: bool = False,
+    ) -> None:
         self.threshold = threshold
         self.model_version = model_version
         self.llm_scorer = llm_scorer
+        self.decision_mode = normalize_decision_mode(decision_mode)
+        self.fail_closed = fail_closed
         self._graph = self._build_graph()
 
     def _build_graph(self) -> Any:
@@ -75,7 +91,18 @@ class EmailRiskGraph:
             llm_failed = True
             llm_reasons = ["llm_unavailable"]
 
-        final_score = rules_score if llm_failed else combine_scores(rules_score, llm_score)
+        if self.decision_mode == "rules_only":
+            final_score = rules_score
+        elif self.decision_mode == "llm_only":
+            if llm_failed and self.fail_closed:
+                final_score = 1.0
+                llm_reasons.append("fail_closed")
+                llm_description = "LLM unavailable; quarantined by fail-closed policy."
+            else:
+                final_score = rules_score if llm_failed else llm_score
+        else:
+            final_score = rules_score if llm_failed else combine_scores(rules_score, llm_score)
+
         reasons = _dedupe(rules_reasons + llm_reasons)
         description = llm_description.strip() or rules_description
         decision = decision_from_score(final_score, self.threshold)

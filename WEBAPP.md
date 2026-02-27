@@ -19,6 +19,10 @@ Required:
 2. `.venv-webapp313` activated
 3. `OPENAI_API_KEY` (optional but recommended; if missing, risk scoring falls back to rules only)
 
+Optional risk routing controls in `.env`:
+1. `RISK_DECISION_MODE=hybrid` (or `rules_only`, `llm_only`)
+2. `RISK_FAIL_CLOSED=true` to quarantine when LLM is unavailable in `llm_only` mode
+
 ## Run
 
 ```bash
