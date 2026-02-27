@@ -1,0 +1,16 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "dependencies": [
+    "langchain",
+    "langchain-openai",
+    "langgraph",
+    "openai",
+    "python-dotenv",
+    "."
+  ],
+  "graphs": {
+    "risk_agent": "./backend/app/risk_agent/studio_graph.py:graph"
+  },
+  "env": ".env"
+}
+

@@ -3,3 +3,7 @@ uvicorn
 streamlit
 requests
 python-dotenv
+langgraph
+langchain
+langchain-openai
+openai
