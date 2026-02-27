@@ -79,12 +79,32 @@ wait_for_http() {
   local delay="${3:-0.4}"
   local i
   for ((i = 0; i < retries; i++)); do
-    if curl -sS -o /dev/null "$url"; then
+    if curl -s -o /dev/null "$url" >/dev/null 2>&1; then
       return 0
     fi
     sleep "$delay"
   done
   return 1
+}
+
+wait_for_any() {
+  # Bash 4+ supports wait -n, but macOS default Bash 3.2 does not.
+  if (( BASH_VERSINFO[0] >= 4 )); then
+    wait -n "$@"
+    return $?
+  fi
+
+  local pids=("$@")
+  local pid
+  while true; do
+    for pid in "${pids[@]}"; do
+      if ! kill -0 "$pid" >/dev/null 2>&1; then
+        wait "$pid" >/dev/null 2>&1 || true
+        return 0
+      fi
+    done
+    sleep 1
+  done
 }
 
 check_port_free "$BACKEND_PORT"
@@ -170,9 +190,9 @@ echo
 echo "Press Ctrl+C to stop all services."
 
 if [[ "$RUN_STUDIO" -eq 1 ]]; then
-  wait -n "$BACKEND_PID" "$FRONTEND_PID" "$STUDIO_PID"
+  wait_for_any "$BACKEND_PID" "$FRONTEND_PID" "$STUDIO_PID"
 else
-  wait -n "$BACKEND_PID" "$FRONTEND_PID"
+  wait_for_any "$BACKEND_PID" "$FRONTEND_PID"
 fi
 
 echo "A service exited. Shutting down the rest..."
