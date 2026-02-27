@@ -1,0 +1,7 @@
+.env
+.venv-webapp/
+.venv-webapp313/
+.secrets/
+client_secret_*.json
+__pycache__/
+*.pyc
