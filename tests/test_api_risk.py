@@ -17,6 +17,7 @@ class RiskApiTests(unittest.TestCase):
             env = {
                 "RISK_THRESHOLD": "0.65",
                 "RISK_LLM_ENABLED": "false",
+                "RISK_LINK_SCAN_ENABLED": "false",
                 "RISK_QUARANTINE_PATH": str(Path(tmpdir) / "quarantine.jsonl"),
                 "RISK_FEEDBACK_PATH": str(Path(tmpdir) / "training_feedback.jsonl"),
             }
@@ -40,6 +41,18 @@ class RiskApiTests(unittest.TestCase):
                     eval_resp = client.post("/risk/emails/evaluate", json=payload)
                     self.assertEqual(eval_resp.status_code, 200)
                     self.assertIn("decision", eval_resp.json())
+
+                    links_resp = client.post(
+                        "/risk/links/evaluate",
+                        json={
+                            "sender_email": "alerts@example.com",
+                            "subject": "check",
+                            "body": "open https://example.com",
+                            "urls": ["https://example.com"],
+                        },
+                    )
+                    self.assertEqual(links_resp.status_code, 200)
+                    self.assertIn("email_risk_summary", links_resp.json())
 
                     list_resp = client.get("/risk/quarantine")
                     self.assertEqual(list_resp.status_code, 200)
@@ -111,4 +124,3 @@ class RiskApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -36,6 +36,8 @@ class DeleteEmailResponse(BaseModel):
 
 RiskDecision = Literal["quarantine", "deliver"]
 RiskStatus = Literal["pending_human_review", "confirmed_scam", "confirmed_legit", "released"]
+LinkVerdict = Literal["safe", "suspicious", "malicious", "unknown"]
+LinkScanStatus = Literal["ok", "timeout", "error"]
 
 
 class RiskEmailInput(BaseModel):
@@ -53,6 +55,28 @@ class RiskEvaluateRequest(BaseModel):
     email: RiskEmailInput
 
 
+class LinkScanResult(BaseModel):
+    original_url: str
+    normalized_url: str
+    final_url: str = ""
+    reachable: bool = False
+    http_status: int | None = None
+    ssl_valid: bool = False
+    ssl_issuer: str = ""
+    ssl_subject: str = ""
+    ssl_expires_at: str | None = None
+    ssl_hostname_match: bool = False
+    yutori_verdict: LinkVerdict = "unknown"
+    yutori_summary: str = ""
+    yutori_provider: str = "yutori_api"
+    yutori_executed: bool = False
+    yutori_task_id: str | None = None
+    yutori_preview_url: str | None = None
+    yutori_details: dict[str, Any] | None = None
+    risk_flags: list[str] = Field(default_factory=list)
+    scan_status: LinkScanStatus = "error"
+
+
 class RiskEvaluateResponse(BaseModel):
     id: str
     decision: RiskDecision
@@ -61,6 +85,11 @@ class RiskEvaluateResponse(BaseModel):
     description: str
     model_version: str
     status: RiskStatus
+    links_found: int = 0
+    links_scanned: int = 0
+    link_results: list[LinkScanResult] = Field(default_factory=list)
+    link_risk_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    link_scan_failed_closed: bool = False
 
 
 class QuarantineRecord(BaseModel):
@@ -77,6 +106,9 @@ class QuarantineRecord(BaseModel):
     created_at: str
     updated_at: str
     email: RiskEmailInput
+    link_results: list[LinkScanResult] = Field(default_factory=list)
+    link_risk_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    link_scan_failed_closed: bool = False
 
 
 class ListQuarantineResponse(BaseModel):
@@ -99,3 +131,25 @@ class ReleaseResponse(BaseModel):
     id: str
     status: RiskStatus
     updated_at: str
+
+
+class LinkEvaluateRequest(BaseModel):
+    sender_email: str
+    subject: str = ""
+    body: str = ""
+    urls: list[str] | None = None
+
+
+class EmailRiskSummary(BaseModel):
+    decision: RiskDecision
+    risk_score: float = Field(..., ge=0.0, le=1.0)
+    links_found: int
+    links_scanned: int
+    link_risk_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    link_scan_failed_closed: bool = False
+    risk_reasons: list[str] = Field(default_factory=list)
+
+
+class LinkEvaluateResponse(BaseModel):
+    email_risk_summary: EmailRiskSummary
+    link_results: list[LinkScanResult] = Field(default_factory=list)

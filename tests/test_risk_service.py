@@ -26,6 +26,7 @@ class RiskServiceTests(unittest.TestCase):
             env = {
                 "RISK_THRESHOLD": "0.65",
                 "RISK_LLM_ENABLED": "false",
+                "RISK_LINK_SCAN_ENABLED": "false",
                 "RISK_QUARANTINE_PATH": str(Path(tmpdir) / "quarantine.jsonl"),
                 "RISK_FEEDBACK_PATH": str(Path(tmpdir) / "training_feedback.jsonl"),
             }
@@ -55,4 +56,3 @@ class RiskServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

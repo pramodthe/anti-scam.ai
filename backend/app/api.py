@@ -6,6 +6,8 @@ from backend.app.schemas import (
     DeleteEmailResponse,
     LabelRequest,
     LabelResponse,
+    LinkEvaluateRequest,
+    LinkEvaluateResponse,
     ListEmailsResponse,
     ListQuarantineResponse,
     QuarantineRecord,
@@ -66,6 +68,19 @@ def evaluate_email(payload: RiskEvaluateRequest) -> RiskEvaluateResponse:
         return risk.evaluate_email(payload.email)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to evaluate risk: {exc}") from exc
+
+
+@app.post("/risk/links/evaluate", response_model=LinkEvaluateResponse)
+def evaluate_links(payload: LinkEvaluateRequest) -> LinkEvaluateResponse:
+    try:
+        return risk.evaluate_links(
+            sender_email=payload.sender_email,
+            subject=payload.subject,
+            body=payload.body,
+            urls=payload.urls,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to evaluate links: {exc}") from exc
 
 
 @app.get("/risk/quarantine", response_model=ListQuarantineResponse)

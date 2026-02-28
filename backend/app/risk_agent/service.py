@@ -10,7 +10,9 @@ from backend.app.risk_agent.graph import EmailRiskGraph, normalize_decision_mode
 from backend.app.risk_agent.llm import RiskLLMScorer
 from backend.app.risk_agent.store import QuarantineStore
 from backend.app.schemas import (
+    EmailRiskSummary,
     LabelResponse,
+    LinkEvaluateResponse,
     ListQuarantineResponse,
     QuarantineRecord,
     ReleaseResponse,
@@ -41,6 +43,12 @@ class RiskService:
         llm_enabled = _env_bool("RISK_LLM_ENABLED", True)
         decision_mode = normalize_decision_mode(os.getenv("RISK_DECISION_MODE", "hybrid"))
         fail_closed = _env_bool("RISK_FAIL_CLOSED", False)
+        link_scan_enabled = _env_bool("RISK_LINK_SCAN_ENABLED", True)
+        link_scan_max_urls = int(os.getenv("RISK_LINK_SCAN_MAX_URLS", "3"))
+        link_scan_timeout_seconds = int(os.getenv("RISK_LINK_SCAN_TIMEOUT_SECONDS", "20"))
+        link_scan_fail_closed = _env_bool("RISK_LINK_SCAN_FAIL_CLOSED", True)
+        link_scan_allow_http = _env_bool("RISK_LINK_SCAN_ALLOW_HTTP", False)
+        yutori_browse_max_steps = int(os.getenv("YUTORI_BROWSE_MAX_STEPS", "20"))
         quarantine_path = os.getenv("RISK_QUARANTINE_PATH", "data/quarantine.jsonl")
         feedback_path = os.getenv("RISK_FEEDBACK_PATH", "data/training_feedback.jsonl")
 
@@ -51,6 +59,12 @@ class RiskService:
             llm_scorer=RiskLLMScorer(model=llm_model, enabled=llm_enabled),
             decision_mode=decision_mode,
             fail_closed=fail_closed,
+            link_scan_enabled=link_scan_enabled,
+            link_scan_max_urls=link_scan_max_urls,
+            link_scan_timeout_seconds=link_scan_timeout_seconds,
+            link_scan_fail_closed=link_scan_fail_closed,
+            link_scan_allow_http=link_scan_allow_http,
+            yutori_browse_max_steps=yutori_browse_max_steps,
         )
 
     def _from_record(self, record: QuarantineRecord, decision: str) -> RiskEvaluateResponse:
@@ -62,6 +76,11 @@ class RiskService:
             description=record.description,
             model_version=record.model_version,
             status=record.status,
+            links_found=len(record.link_results),
+            links_scanned=len(record.link_results),
+            link_results=record.link_results,
+            link_risk_score=record.link_risk_score,
+            link_scan_failed_closed=record.link_scan_failed_closed,
         )
 
     @staticmethod
@@ -96,6 +115,9 @@ class RiskService:
                 created_at=now,
                 updated_at=now,
                 email=email,
+                link_results=response.link_results,
+                link_risk_score=response.link_risk_score,
+                link_scan_failed_closed=response.link_scan_failed_closed,
             )
             self.store.upsert(record)
 
@@ -167,3 +189,29 @@ class RiskService:
 
         logger.info("risk_released id=%s", record.id)
         return ReleaseResponse(id=record.id, status="released", updated_at=updated_at)
+
+    def evaluate_links(
+        self,
+        sender_email: str,
+        subject: str,
+        body: str,
+        urls: list[str] | None = None,
+    ) -> LinkEvaluateResponse:
+        link_results, assessment = self.graph.evaluate_links(
+            sender_email=sender_email,
+            subject=subject,
+            body=body,
+            urls=urls,
+        )
+        score = float(assessment.risk_score or 0.0)
+        decision = "quarantine" if assessment.force_quarantine else "deliver"
+        summary = EmailRiskSummary(
+            decision=decision,  # type: ignore[arg-type]
+            risk_score=score,
+            links_found=len(link_results),
+            links_scanned=len(link_results),
+            link_risk_score=assessment.risk_score,
+            link_scan_failed_closed=assessment.failed_closed,
+            risk_reasons=assessment.risk_flags,
+        )
+        return LinkEvaluateResponse(email_risk_summary=summary, link_results=link_results)
