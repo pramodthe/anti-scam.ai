@@ -1,425 +1,397 @@
-# AI Email Risk Agent & Voice Threat Monitor
+# AI Email Risk Agent and Voice Threat Monitor
 
-An AI-powered security platform that detects phishing emails and social-engineering voice threats in real time.
+This repository runs two independent security services:
 
-Two independent services:
+- Email security service: Gmail inbox access, phishing/scam scoring, URL scanning, quarantine workflow, and human-in-the-loop labeling.
+- Voice security service: live and batch audio analysis for social-engineering risk signals.
 
-| Service | Port | Description |
-|---------|------|-------------|
-| **Email Risk API** | 8000 | Gmail-connected phishing detection with LangGraph agent |
-| **Email Frontend** | 8501 | Streamlit UI — inbox, quarantine, HITL labeling |
-| **Voice Threat API** | 8100 | Real-time voice scam detection via Modulate Velma-2 |
-| **Voice Frontend** | 8502 | Streamlit UI — mic capture, batch upload, risk dashboard |
-| **LangGraph Studio** | 2024 | Optional — visual workflow debugger |
+The app is built with FastAPI + Streamlit, with a LangGraph workflow for email risk decisions.
 
----
+## Services
 
-## Tech Stack
+| Service | Default URL | Purpose |
+| --- | --- | --- |
+| Email API | `http://127.0.0.1:8000` | Gmail operations, email risk evaluation, quarantine APIs |
+| Email UI | `http://127.0.0.1:8501` | Inbox triage, quarantine review, label/release actions |
+| Voice API | `http://127.0.0.1:8100` | WebSocket live voice scoring + batch audio scoring |
+| Voice UI | `http://127.0.0.1:8502` | Live mic monitor and batch file upload |
+| LangGraph dev server (optional) | `http://127.0.0.1:2024` | Graph debugging and Studio integration |
 
-### Core Frameworks
-- **[FastAPI](https://fastapi.tiangolo.com/)** — High-performance async REST APIs
-- **[Streamlit](https://streamlit.io/)** — Rapid frontend prototyping
-- **[LangGraph](https://langchain-ai.github.io/langgraph/)** — Stateful agent orchestration
-- **[LangChain](https://python.langchain.com/)** — LLM application patterns
-- **[Pydantic](https://docs.pydantic.dev/)** — Data validation & serialization
-
-### AI & ML Services
-- **[OpenAI GPT-4.1-mini](https://platform.openai.com/)** — LLM-based email risk scoring
-- **[Modulate Velma-2](https://www.modulate.com/)** — Real-time speech-to-text with emotion detection
-- **[GLiNER2](https://www.pioneeraiagents.com/)** (Pioneer AI) — Named Entity Recognition for PII/PHI extraction (SSN, credit cards, medical records, bank accounts)
-- **[Yutori](https://yutori.com/)** — Browser-agent for website phishing detection
-- **[LangSmith](https://smith.langchain.com/)** — LLM tracing & observability (optional)
-
-### Email Integration
-- **[Gmail API](https://developers.google.com/gmail/api)** — OAuth2-authenticated email operations
-  - `gmail.modify` — Read, trash, modify labels
-  - `gmail.send` — Send emails
-
-### Python Libraries
-| Library | Purpose |
-|---------|---------|
-| `uvicorn` | ASGI server for FastAPI |
-| `httpx` | Async HTTP client for external APIs |
-| `websockets` | WebSocket client/server (Modulate streaming) |
-| `python-multipart` | File upload handling |
-| `python-dotenv` | Environment variable management |
-| `requests` | HTTP client for Gmail API |
-| `openai` | OpenAI SDK |
-| `langchain-openai` | LangChain-OpenAI integration |
-| `gliner` | GLiNER2 NER model for PII/PHI extraction |
-
-### Data Persistence
-- **JSONL files** — Lightweight append-only storage
-  - `data/quarantine.jsonl` — Quarantined email records
-  - `data/training_feedback.jsonl` — HITL label feedback
-
-### Development Tools
-- **pytest** — Testing framework
-- **LangGraph Studio** — Visual workflow debugger
-
----
-
-## Architecture Overview
+## High-Level Architecture
 
 ```mermaid
 graph TB
     subgraph Email Service
-        Gmail[Gmail API] -->|Fetch emails| EmailAPI[Email Risk API<br/>:8000]
-        EmailAPI --> RiskAgent[LangGraph Risk Agent]
-        RiskAgent --> QStore[(Quarantine Store<br/>quarantine.jsonl)]
-        QStore --> EmailUI[Streamlit Email UI<br/>:8501]
-        EmailUI -->|HITL Label| QStore
-        QStore --> Feedback[(Training Feedback<br/>training_feedback.jsonl)]
+        Gmail[Gmail API] --> EmailAPI[Email API :8000]
+        EmailAPI --> RiskService[RiskService]
+        RiskService --> RiskGraph[LangGraph EmailRiskGraph]
+        RiskGraph --> Quarantine[(data/quarantine.jsonl)]
+        Quarantine --> EmailUI[Email UI :8501]
+        EmailUI --> Feedback[(data/training_feedback.jsonl)]
     end
 
     subgraph Voice Service
-        Mic[Microphone / Audio File] -->|WebSocket / REST| VoiceAPI[Voice Threat API<br/>:8100]
-        VoiceAPI -->|Streaming STT| Velma2[Modulate Velma-2]
-        Velma2 -->|Utterances| VoiceAnalyzer[Voice Risk Analyzer]
-        VoiceAnalyzer --> VoiceUI[Streamlit Voice UI<br/>:8502]
+        Mic[Microphone/Audio File] --> VoiceUI[Voice UI :8502]
+        VoiceUI --> VoiceAPI[Voice API :8100]
+        VoiceAPI --> Modulate[Modulate Velma-2]
+        Modulate --> VoiceAnalyzer[VoiceRiskAnalyzer]
     end
-
-    style EmailAPI fill:#2563eb,color:#fff
-    style VoiceAPI fill:#7c3aed,color:#fff
-    style RiskAgent fill:#059669,color:#fff
-    style VoiceAnalyzer fill:#059669,color:#fff
 ```
 
----
-
-## Email Risk Agent — LangGraph Pipeline
-
-The core email risk engine is a multi-node LangGraph state machine that evaluates every incoming email through deterministic rules, LLM scoring, and website trust verification.
-
-### Agent Graph
-
-```mermaid
-stateDiagram-v2
-    [*] --> extract_features
-    extract_features --> extract_links
-    extract_links --> scan_links
-    scan_links --> score_risk
-
-    state score_risk <<choice>>
-    score_risk --> quarantine: risk_score >= threshold
-    score_risk --> deliver: risk_score < threshold
-
-    quarantine --> [*]
-    deliver --> [*]
-```
-
-### Agent Nodes (Detail)
+## Email Agent Architecture (LangGraph)
 
 ```mermaid
 flowchart LR
-    A[extract_features] --> B[extract_links] --> C[scan_links] --> D[score_risk] --> E{Route}
-    E -->|quarantine| F[quarantine_node]
-    E -->|deliver| G[deliver_node]
-
-    subgraph extract_features
-        direction TB
-        EF1[Parse sender name & domain]
-        EF2[Detect display-name / domain mismatch]
-        EF3[Match urgency, credential,<br/>payment, promo, impersonation keywords]
-        EF4[Check suspicious TLDs]
-        EF5[Detect random sender patterns]
-    end
-
-    subgraph scan_links
-        direction TB
-        SL1[Normalize & dedupe URLs]
-        SL2[SSL/TLS certificate check]
-        SL3[Yutori browser-agent inspection]
-        SL4[Assess link risk<br/>malicious → force quarantine]
-    end
-
-    subgraph score_risk
-        direction TB
-        SR1[Rules score — keyword heuristics]
-        SR2[LLM score — GPT-4.1-mini]
-        SR3["Combine: 0.4×rules + 0.6×LLM"]
-        SR4["Final = max(base, link_risk)"]
-    end
+    A[extract_features] --> B[extract_links]
+    B --> C[scan_links]
+    C --> D[score_risk]
+    D --> E{decision}
+    E -->|quarantine| F[quarantine node]
+    E -->|deliver| G[deliver node]
 ```
 
-### State Schema
+### Email scoring model
 
-```mermaid
-classDiagram
-    class EmailRiskState {
-        +dict email
-        +dict features
-        +list~dict~ extracted_links
-        +int links_found
-        +int links_scanned
-        +list~dict~ link_results
-        +float link_risk_score
-        +list~str~ link_risk_flags
-        +bool link_force_quarantine
-        +bool link_scan_failed_closed
-        +float risk_score
-        +list~str~ risk_reasons
-        +str description
-        +str decision
-        +str status
-        +str model_version
-    }
-```
+1. Deterministic rule score from sender/text features (`rules.py`).
+2. Optional Pioneer classifier score (`llm.py`).
+3. Decision mode:
+- `rules_only`: use rules score.
+- `hybrid`: `0.4 * rules + 0.6 * llm` (falls back to rules if LLM unavailable).
+- `llm_only`: use LLM score; if unavailable and `RISK_FAIL_CLOSED=true`, force score `1.0`.
+4. Link score override: final score is `max(base_score, link_risk_score)` when links were scanned.
+5. Force quarantine if link assessment marks `force_quarantine=true`.
 
-### Scoring Modes
+### Deterministic phishing features
 
-| Mode | Formula | Fallback |
-|------|---------|----------|
-| `hybrid` (default) | `0.4 × rules + 0.6 × LLM` | Rules-only if LLM fails |
-| `rules_only` | Deterministic keyword scoring | — |
-| `llm_only` | LLM classification | Quarantine if `RISK_FAIL_CLOSED=true` |
+- Company display-name vs sender-domain mismatch.
+- Urgency language.
+- Credential phishing patterns.
+- Payment fraud patterns.
+- Promotional scam lure patterns.
+- Impersonation keywords.
+- Suspicious sender TLDs.
+- Randomized sender domain/local-part heuristics.
 
-### Keyword Detection Rules
-
-| Category | Examples |
-|----------|----------|
-| **Urgency** | `urgent`, `immediately`, `action required`, `final notice`, `expires today` |
-| **Credential Phishing** | `verify your account`, `reset password`, `login`, `OTP`, `SSN` |
-| **Payment Fraud** | `wire transfer`, `gift card`, `invoice attached`, `crypto payment` |
-| **Promo Scam** | `bonus offer`, `free spins`, `jackpot`, `casino`, `no deposit` |
-| **Impersonation** | `CEO`, `finance team`, `HR team`, `support team` |
-| **Suspicious TLDs** | `.top`, `.xyz`, `.biz`, `.click`, `.shop`, `.work`, `.zip` |
-
-### Link Scan Pipeline
+### Link scanning pipeline
 
 ```mermaid
 flowchart TD
-    URL[Extracted URL] --> Norm[Normalize & strip tracking params]
-    Norm --> SSL[SSL/TLS Certificate Check]
-    Norm --> Yutori[Yutori Browser Agent]
-    SSL --> Assess[Link Risk Assessment]
-    Yutori --> Assess
-    Assess --> V{Verdict}
-    V -->|malicious| FQ[Force Quarantine]
-    V -->|error + fail_closed| FQ
-    V -->|safe| Pass[Allow through]
+    L1[Extract and normalize URLs] --> L2[Resolve URL reachability]
+    L2 --> L3[Yutori browser task]
+    L2 --> L4[SSL certificate checks]
+    L3 --> L5[Aggregate risk flags]
+    L4 --> L5
+    L5 --> L6{force quarantine?}
+    L6 -->|yes| L7[quarantine]
+    L6 -->|no| L8[continue by score]
 ```
 
----
+Link risk can be raised by:
+- Yutori verdict (`malicious`, `suspicious`, `unknown`)
+- Unreachable link
+- Timeout/error (optionally fail-closed)
+- Invalid SSL on HTTPS URLs
 
-## Voice Threat Monitor — Modulate Velma-2
-
-A separate service that detects social-engineering attacks in voice calls using Modulate's Velma-2 speech-to-text with emotion detection and GLiNER2 Named Entity Recognition for PII/PHI extraction.
-
-### Voice Pipeline
+## Voice Architecture
 
 ```mermaid
 sequenceDiagram
-    participant Client as Browser / Mic
-    participant API as Voice API :8100
+    participant Browser
+    participant VoiceAPI as Voice API
     participant Velma as Modulate Velma-2
-    participant Analyzer as Voice Risk Analyzer
-    participant GLiNER as GLiNER2 (Pioneer AI)
+    participant Analyzer as VoiceRiskAnalyzer
 
-    Client->>API: WebSocket connect (/ws/voice)
-    API->>Velma: WebSocket connect (STT Streaming)
-    API-->>Client: {"type": "connected"}
-
-    loop Audio streaming
-        Client->>API: Binary PCM audio frame
-        API->>Velma: Forward audio
-        Velma-->>API: Utterance (text, emotion, speaker)
-        API->>Analyzer: Process utterance
-        Analyzer->>GLiNER: Extract PII/PHI entities
-        GLiNER-->>Analyzer: Detected entities (SSN, credit cards, etc.)
-        Analyzer-->>API: Risk update + alerts
-        API-->>Client: {"type": "utterance", ...}
-        API-->>Client: {"type": "risk_update", ...}
-    end
-
-    Client->>API: {"type": "stop"}
-    API->>Velma: End of stream
-    API-->>Client: {"type": "session_summary", ...}
+    Browser->>VoiceAPI: WS connect /ws/voice
+    VoiceAPI->>Velma: open streaming session
+    Browser->>VoiceAPI: PCM audio chunks
+    VoiceAPI->>Velma: forward chunks
+    Velma-->>VoiceAPI: utterances
+    VoiceAPI->>Analyzer: process_utterance
+    Analyzer-->>VoiceAPI: alerts + risk_update
+    VoiceAPI-->>Browser: utterance/alert/risk_update
+    Browser->>VoiceAPI: stop
+    VoiceAPI-->>Browser: session_summary
 ```
 
-### Voice Risk Signals
+### Voice risk signals
 
-The voice analyzer reuses the same keyword rules from the email engine and adds voice-specific signals:
+- Reuses email keyword families: urgency, credential phishing, payment fraud, promo scam, impersonation.
+- Adds emotion signals (high-risk and moderate-risk classes).
+- Adds keyword-based PII/PHI mention detection.
+- Final decision thresholds:
+- `safe`: score < `0.65`
+- `suspicious`: `0.65 <= score < 0.85`
+- `threat`: score >= `0.85`
 
-| Signal | Weight | Description |
-|--------|--------|-------------|
-| Urgency keywords | 0.15 | Same set as email rules |
-| Credential keywords | 0.20 | Password, SSN, verify account |
-| Payment keywords | 0.20 | Wire transfer, gift card |
-| Promo scam keywords | 0.12 | Bonus, jackpot, casino |
-| Impersonation keywords | 0.15 | CEO, HR team, support |
-| High-risk emotions | 0.15 | Angry, fearful, aggressive, distressed |
-| Moderate-risk emotions | 0.08 | Anxious, frustrated, nervous |
-| PII/PHI detection | 0.40 | GLiNER2 NER for SSN, credit cards, medical records, bank accounts |
+## Repository Layout
 
-Decisions: `safe` (< 0.65) · `suspicious` (0.65–0.85) · `threat` (≥ 0.85)
-
----
-
-## HITL (Human-in-the-Loop) Workflow
-
-```mermaid
-flowchart LR
-    Q[Quarantined Email] --> Review[Human Review in UI]
-    Review -->|Scam| CS[Confirmed Scam<br/>label=1]
-    Review -->|Not Scam| CL[Confirmed Legit<br/>label=0]
-    CS --> FB[(training_feedback.jsonl)]
-    CL --> FB
-    CL --> Release[Release to Inbox]
+```text
+backend/
+  api.py
+  voice_api.py
+  app/
+    api.py
+    gmail_client.py
+    gmail_service.py
+    schemas.py
+    modulate_client.py
+    voice_risk_analyzer.py
+    voice_schemas.py
+    risk_agent/
+      email_parsing.py
+      graph.py
+      link_scoring.py
+      links.py
+      llm.py
+      rules.py
+      service.py
+      ssl_check.py
+      state.py
+      store.py
+      studio_graph.py
+      yutori_client.py
+frontend/
+  streamlit_app.py
+  voice_app.py
+scripts/
+  setup_gmail.py
+  batch_test_live.py
+  batch_test_random_links.py
+data/
+  quarantine.jsonl
+  training_feedback.jsonl
+tests/
+run.sh
+langgraph.json
+requirements-webapp.txt
+.env.example
 ```
-
----
-
-## Project Structure
-
-```
-├── backend/
-│   ├── app/
-│   │   ├── api.py                  # Email Risk API (FastAPI)
-│   │   ├── gmail_client.py         # Gmail API client
-│   │   ├── gmail_service.py        # Gmail service layer
-│   │   ├── schemas.py              # Pydantic models — email
-│   │   ├── modulate_client.py      # Modulate Velma-2 client (WS + REST)
-│   │   ├── voice_risk_analyzer.py  # Voice-specific risk scoring
-│   │   ├── voice_schemas.py        # Pydantic models — voice
-│   │   └── risk_agent/
-│   │       ├── graph.py            # LangGraph state machine
-│   │       ├── rules.py            # Deterministic keyword rules
-│   │       ├── llm.py              # GPT-4.1-mini risk scorer
-│   │       ├── links.py            # URL extraction & normalization
-│   │       ├── ssl_check.py        # SSL/TLS certificate verification
-│   │       ├── link_scoring.py     # Link risk assessment
-│   │       ├── yutori_client.py    # Yutori browser-agent client
-│   │       ├── service.py          # RiskService orchestrator
-│   │       ├── store.py            # Quarantine JSONL store
-│   │       └── state.py            # EmailRiskState TypedDict
-│   └── voice_api.py                # Voice Threat API (FastAPI, standalone)
-├── frontend/
-│   ├── streamlit_app.py            # Email UI (inbox + quarantine)
-│   └── voice_app.py                # Voice UI (mic + batch upload)
-├── data/
-│   ├── quarantine.jsonl            # Quarantined email records
-│   └── training_feedback.jsonl     # HITL label feedback
-├── tests/                          # pytest test suite
-├── scripts/
-│   ├── setup_gmail.py              # Gmail OAuth setup
-│   └── batch_test_live.py          # Batch email testing
-├── spec.md                         # Full technical specification
-├── run.sh                          # Launches all services
-├── langgraph.json                  # LangGraph Studio config
-└── requirements-webapp.txt         # Python dependencies
-```
-
----
 
 ## Setup
 
-### Prerequisites
-
-- Python 3.13+
-- Gmail OAuth credentials (see [GMAIL_SETUP.md](GMAIL_SETUP.md))
-- OpenAI API key (for LLM risk scoring)
-- Modulate API key (for voice features)
-
-### Install
+### 1) Create and activate virtualenv
 
 ```bash
 cd /Users/pramodthebe/Desktop/websecurity
-python -m venv .venv-webapp313
+python3.13 -m venv .venv-webapp313
 source .venv-webapp313/bin/activate
-pip install -r requirements-webapp.txt
+python -m pip install --upgrade pip
 ```
 
-### Configure
+### 2) Install dependencies
+
+```bash
+python -m pip install -r requirements-webapp.txt
+```
+
+The Gmail integration imports Google client packages directly, so install these too if they are not already in your environment:
+
+```bash
+python -m pip install google-api-python-client google-auth-oauthlib
+```
+
+### 3) Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Key environment variables:
+### 4) Configure Gmail OAuth (for Gmail endpoints/UI)
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENAI_API_KEY` | Recommended | GPT-4.1-mini for email risk scoring |
-| `MODULATE_API_KEY` | For voice | Modulate Velma-2 API key |
-| `RISK_DECISION_MODE` | No | `hybrid` / `rules_only` / `llm_only` |
-| `RISK_THRESHOLD` | No | Quarantine threshold (default: `0.65`) |
-| `RISK_LINK_SCAN_ENABLED` | No | Enable URL scanning (default: `true`) |
-| `RISK_LINK_SCAN_FAIL_CLOSED` | No | Quarantine on scan error (default: `true`) |
-| `YUTORI_API_KEY` | For link scans | Yutori browser-agent key |
+- Put OAuth client JSON at `.secrets/secrets.json`.
+- Run:
 
----
+```bash
+python scripts/setup_gmail.py
+```
 
-## Run
+This creates `.secrets/token.json`.
 
-Launch all services with one command:
+See also [GMAIL_SETUP.md](/Users/pramodthebe/Desktop/websecurity/GMAIL_SETUP.md).
+
+## Runtime
+
+### Start all services
 
 ```bash
 source .venv-webapp313/bin/activate
 bash run.sh
 ```
 
-This starts:
-- Email API on `http://127.0.0.1:8000`
-- Email UI on `http://127.0.0.1:8501`
-- Voice API on `http://127.0.0.1:8100`
-- Voice UI on `http://127.0.0.1:8502`
-- LangGraph Studio on `http://127.0.0.1:2024` (optional)
+Optional flags:
+- `--no-studio`
+- `--tunnel`
 
-Or run services individually:
+Runtime logs are written under `.run-logs/`.
+
+### Start services individually
 
 ```bash
-# Email backend
-uvicorn backend.app.api:app --reload --port 8000
+# Email API
+uvicorn backend.api:app --host 127.0.0.1 --port 8000 --reload
 
-# Email frontend
-streamlit run frontend/streamlit_app.py --server.port 8501
+# Email UI
+EMAIL_ASSISTANT_API=http://127.0.0.1:8000 \
+streamlit run frontend/streamlit_app.py --server.address 127.0.0.1 --server.port 8501
 
-# Voice backend
-uvicorn backend.voice_api:app --reload --port 8100
+# Voice API
+uvicorn backend.voice_api:app --host 127.0.0.1 --port 8100 --reload
 
-# Voice frontend
-VOICE_API_URL=http://127.0.0.1:8100 streamlit run frontend/voice_app.py --server.port 8502
+# Voice UI
+VOICE_API_URL=http://127.0.0.1:8100 \
+streamlit run frontend/voice_app.py --server.address 127.0.0.1 --server.port 8502
+
+# LangGraph dev server
+langgraph dev --config langgraph.json --host 127.0.0.1 --port 2024 --no-browser
 ```
-
----
 
 ## API Reference
 
-### Email Risk API (`:8000`)
+### Email API (`:8000`)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
 | `GET` | `/health` | Health check |
-| `GET` | `/gmail/emails` | List inbox emails |
+| `GET` | `/gmail/emails` | List Gmail messages |
 | `POST` | `/gmail/send` | Send email |
-| `DELETE` | `/gmail/emails/{id}` | Delete email |
-| `POST` | `/risk/emails/evaluate` | Run risk agent on email |
-| `POST` | `/risk/links/evaluate` | Evaluate URLs independently |
-| `GET` | `/risk/quarantine` | List quarantined emails |
-| `GET` | `/risk/quarantine/{id}` | Get quarantine detail |
-| `POST` | `/risk/quarantine/{id}/label` | HITL label (scam/legit) |
-| `POST` | `/risk/quarantine/{id}/release` | Release from quarantine |
+| `DELETE` | `/gmail/emails/{message_id}` | Move message to trash |
+| `POST` | `/risk/emails/evaluate` | Run full risk evaluation |
+| `POST` | `/risk/links/evaluate` | Evaluate links without full email fetch path |
+| `GET` | `/risk/quarantine` | List quarantine records (excluding released) |
+| `GET` | `/risk/quarantine/{message_id}` | Get single quarantine record |
+| `POST` | `/risk/quarantine/{message_id}/label` | Label record (`0` legit, `1` scam) |
+| `POST` | `/risk/quarantine/{message_id}/release` | Release from quarantine |
 
-### Voice Threat API (`:8100`)
+### Voice API (`:8100`)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health + Modulate config status |
-| `WS` | `/ws/voice` | Real-time voice streaming (PCM 16-bit 16kHz) |
-| `POST` | `/voice/analyze` | Batch audio upload + analysis |
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Voice health + Modulate configuration flags |
+| `WS` | `/ws/voice` | Real-time PCM audio streaming and risk updates |
+| `POST` | `/voice/analyze` | Batch audio upload and scoring |
 
----
+### Sample payload: email evaluation
 
-## Tests
+```json
+{
+  "email": {
+    "id": "msg-1",
+    "thread_id": "thread-1",
+    "from_email": "PayPal Support <alerts@review-center.biz>",
+    "to_email": "user@example.com",
+    "subject": "Urgent account verification",
+    "body": "Immediate action required. Verify your account password.",
+    "send_time": "Fri, 27 Feb 2026 12:00:00 +0000",
+    "headers": null
+  }
+}
+```
+
+### Sample payload: link-only evaluation
+
+```json
+{
+  "sender_email": "alerts@example.com",
+  "subject": "Security update",
+  "body": "Please review https://example.com",
+  "urls": ["https://example.com"]
+}
+```
+
+## Environment Variables
+
+### App wiring
+
+| Variable | Default |
+| --- | --- |
+| `EMAIL_ASSISTANT_API` | `http://127.0.0.1:8000` |
+| `VOICE_API_URL` | `http://127.0.0.1:8100` |
+| `GMAIL_ACCOUNT` | empty |
+| `EMAIL_DEFAULT_TO` | empty |
+
+### Email risk engine
+
+| Variable | Default |
+| --- | --- |
+| `RISK_THRESHOLD` | `0.65` |
+| `RISK_DECISION_MODE` | `hybrid` |
+| `RISK_FAIL_CLOSED` | `false` |
+| `RISK_MODEL_VERSION` | `risk-agent-v1` |
+| `RISK_LLM_ENABLED` | `true` |
+| `RISK_LLM_MODEL` | code default `gpt-4.1-mini`; `.env.example` currently uses a Pioneer job-id value |
+| `RISK_LLM_API_URL` | `https://api.pioneer.ai/gliner-2/custom` |
+| `RISK_LLM_API_KEY` | empty |
+| `RISK_LLM_JOB_ID` | from `RISK_LLM_MODEL` |
+| `RISK_LLM_TASK` | `classify_text` |
+| `RISK_LLM_SCHEMA_CATEGORIES` | `scam,legitimate` |
+| `RISK_LLM_THRESHOLD` | `0.5` |
+| `RISK_LLM_TIMEOUT_SECONDS` | `20` |
+
+### Link scanning
+
+| Variable | Default |
+| --- | --- |
+| `RISK_LINK_SCAN_ENABLED` | `true` |
+| `RISK_LINK_SCAN_MAX_URLS` | `3` |
+| `RISK_LINK_SCAN_TIMEOUT_SECONDS` | `20` |
+| `RISK_LINK_SCAN_FAIL_CLOSED` | `true` |
+| `RISK_LINK_SCAN_ALLOW_HTTP` | `false` |
+| `YUTORI_API_KEY` | empty |
+| `YUTORI_BASE_URL` | `https://api.yutori.com/v1` |
+| `YUTORI_BROWSE_MAX_STEPS` | `20` |
+| `YUTORI_BROWSE_PATH` | `/browsing/tasks` |
+| `YUTORI_BROWSE_RESULT_PATH` | `/browsing/tasks/{task_id}` |
+| `YUTORI_POLL_TIMEOUT_SECONDS` | `90` |
+
+### Persistence
+
+| Variable | Default |
+| --- | --- |
+| `RISK_QUARANTINE_PATH` | `data/quarantine.jsonl` |
+| `RISK_FEEDBACK_PATH` | `data/training_feedback.jsonl` |
+
+### `run.sh` host/port overrides
+
+- `VENV_PATH`
+- `BACKEND_HOST`, `BACKEND_PORT`
+- `FRONTEND_HOST`, `FRONTEND_PORT`
+- `VOICE_BACKEND_HOST`, `VOICE_BACKEND_PORT`
+- `VOICE_FRONTEND_HOST`, `VOICE_FRONTEND_PORT`
+- `LANGGRAPH_HOST`, `LANGGRAPH_PORT`
+
+## Data and HITL workflow
+
+- Quarantine records are append-only writes to `data/quarantine.jsonl`.
+- Human labels append to `data/training_feedback.jsonl`.
+- Listing quarantine excludes records with `status="released"`.
+- Re-evaluating an existing message id uses stored state.
+- Stored statuses `pending_human_review` and `confirmed_scam` return `quarantine`.
+- Stored statuses `confirmed_legit` and `released` return `deliver`.
+
+## Testing
+
+Run from repository root:
 
 ```bash
 source .venv-webapp313/bin/activate
-pytest tests/ -v
+python -m pytest -q
 ```
 
----
+In this environment, invoking `.venv-webapp313/bin/pytest` directly may require `PYTHONPATH=.`:
+
+```bash
+PYTHONPATH=. .venv-webapp313/bin/pytest -q
+```
+
+Current suite passes:
+- 41 tests passed locally.
+
+## Code Review Notes (Current State)
+
+1. `run.sh --no-studio` still checks for `langgraph` binary before startup.
+2. Voice `session_summary` UI expects `session_duration_ms`, but backend summary does not currently provide it.
+3. Voice PII/PHI detection is keyword-based (not model-based NER).
 
 ## License
 
-Private — all rights reserved.
+Private repository. All rights reserved.
