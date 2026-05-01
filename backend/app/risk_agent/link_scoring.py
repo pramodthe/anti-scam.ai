@@ -51,10 +51,14 @@ def assess_link_risk(link_results: list[LinkScanResult], fail_closed: bool) -> L
                 failed_closed = True
                 flags.append("link_unreachable_fail_closed")
 
-        if not result.ssl_valid and result.normalized_url.startswith("https://"):
-            score = max(score, 0.92)
-            force_quarantine = True
-            flags.append("invalid_ssl_certificate")
+        if result.normalized_url.startswith("https://"):
+            if result.ssl_state == "invalid":
+                score = max(score, 0.92)
+                force_quarantine = True
+                flags.append("invalid_ssl_certificate")
+            elif result.ssl_state == "unknown":
+                score = max(score, 0.55)
+                flags.append("ssl_state_unknown")
 
         if result.scan_status == "timeout":
             score = max(score, 0.75)

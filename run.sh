@@ -8,13 +8,9 @@ VENV_PATH="${VENV_PATH:-$ROOT_DIR/.venv-webapp313}"
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
-FRONTEND_PORT="${FRONTEND_PORT:-8501}"
+FRONTEND_PORT="${FRONTEND_PORT:-3000}"
 LANGGRAPH_HOST="${LANGGRAPH_HOST:-127.0.0.1}"
 LANGGRAPH_PORT="${LANGGRAPH_PORT:-2024}"
-VOICE_BACKEND_HOST="${VOICE_BACKEND_HOST:-127.0.0.1}"
-VOICE_BACKEND_PORT="${VOICE_BACKEND_PORT:-8100}"
-VOICE_FRONTEND_HOST="${VOICE_FRONTEND_HOST:-127.0.0.1}"
-VOICE_FRONTEND_PORT="${VOICE_FRONTEND_PORT:-8502}"
 RUN_STUDIO=1
 STUDIO_TUNNEL=0
 
@@ -23,14 +19,13 @@ usage() {
 Usage: ./run.sh [options]
 
 Options:
-  --no-studio      Start only backend + frontend (skip langgraph dev)
+  --no-studio      Start backend + Next.js frontend only
   --tunnel         Start langgraph dev with --tunnel
   -h, --help       Show this help
 
 Env overrides:
   VENV_PATH, BACKEND_HOST, BACKEND_PORT, FRONTEND_HOST, FRONTEND_PORT,
-  LANGGRAPH_HOST, LANGGRAPH_PORT, VOICE_BACKEND_HOST, VOICE_BACKEND_PORT,
-  VOICE_FRONTEND_HOST, VOICE_FRONTEND_PORT
+  LANGGRAPH_HOST, LANGGRAPH_PORT
 EOF
 }
 
@@ -61,14 +56,24 @@ if [[ ! -d "$VENV_PATH" ]]; then
   exit 1
 fi
 
+if [[ ! -d "$ROOT_DIR/frontend-next" ]]; then
+  echo "Missing frontend-next directory." >&2
+  exit 1
+fi
+
 source "$VENV_PATH/bin/activate"
 
-for cmd in uvicorn streamlit langgraph; do
+for cmd in uvicorn npm; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "Missing command in venv: $cmd" >&2
+    echo "Missing command: $cmd" >&2
     exit 1
   fi
 done
+
+if [[ "$RUN_STUDIO" -eq 1 ]] && ! command -v langgraph >/dev/null 2>&1; then
+  echo "Missing command in venv: langgraph" >&2
+  exit 1
+fi
 
 check_port_free() {
   local port="$1"
@@ -80,8 +85,8 @@ check_port_free() {
 
 wait_for_http() {
   local url="$1"
-  local retries="${2:-25}"
-  local delay="${3:-0.4}"
+  local retries="${2:-40}"
+  local delay="${3:-0.5}"
   local i
   for ((i = 0; i < retries; i++)); do
     if curl -s -o /dev/null "$url" >/dev/null 2>&1; then
@@ -93,7 +98,6 @@ wait_for_http() {
 }
 
 wait_for_any() {
-  # Bash 4+ supports wait -n, but macOS default Bash 3.2 does not.
   if (( BASH_VERSINFO[0] >= 4 )); then
     wait -n "$@"
     return $?
@@ -114,8 +118,6 @@ wait_for_any() {
 
 check_port_free "$BACKEND_PORT"
 check_port_free "$FRONTEND_PORT"
-check_port_free "$VOICE_BACKEND_PORT"
-check_port_free "$VOICE_FRONTEND_PORT"
 if [[ "$RUN_STUDIO" -eq 1 ]]; then
   check_port_free "$LANGGRAPH_PORT"
 fi
@@ -123,9 +125,7 @@ fi
 mkdir -p .run-logs
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKEND_LOG=".run-logs/backend-$STAMP.log"
-FRONTEND_LOG=".run-logs/frontend-$STAMP.log"
-VOICE_BACKEND_LOG=".run-logs/voice-backend-$STAMP.log"
-VOICE_FRONTEND_LOG=".run-logs/voice-frontend-$STAMP.log"
+FRONTEND_LOG=".run-logs/frontend-next-$STAMP.log"
 STUDIO_LOG=".run-logs/studio-$STAMP.log"
 
 PIDS=()
@@ -151,39 +151,17 @@ if ! wait_for_http "http://$BACKEND_HOST:$BACKEND_PORT/health"; then
   exit 1
 fi
 
-echo "Starting frontend on http://$FRONTEND_HOST:$FRONTEND_PORT ..."
-EMAIL_ASSISTANT_API="http://$BACKEND_HOST:$BACKEND_PORT" \
-  streamlit run frontend/streamlit_app.py \
-    --server.address "$FRONTEND_HOST" \
-    --server.port "$FRONTEND_PORT" >"$FRONTEND_LOG" 2>&1 &
+echo "Starting Next.js frontend on http://$FRONTEND_HOST:$FRONTEND_PORT ..."
+(
+  cd "$ROOT_DIR/frontend-next"
+  NEXT_PUBLIC_EMAIL_API_BASE="http://$BACKEND_HOST:$BACKEND_PORT" \
+    npm run dev -- --hostname "$FRONTEND_HOST" --port "$FRONTEND_PORT" >"$ROOT_DIR/$FRONTEND_LOG" 2>&1
+) &
 FRONTEND_PID=$!
 PIDS+=("$FRONTEND_PID")
 
 if ! wait_for_http "http://$FRONTEND_HOST:$FRONTEND_PORT"; then
   echo "Frontend failed to start. See $FRONTEND_LOG" >&2
-  exit 1
-fi
-
-echo "Starting voice backend on http://$VOICE_BACKEND_HOST:$VOICE_BACKEND_PORT ..."
-uvicorn backend.voice_api:app --host "$VOICE_BACKEND_HOST" --port "$VOICE_BACKEND_PORT" --reload >"$VOICE_BACKEND_LOG" 2>&1 &
-VOICE_BACKEND_PID=$!
-PIDS+=("$VOICE_BACKEND_PID")
-
-if ! wait_for_http "http://$VOICE_BACKEND_HOST:$VOICE_BACKEND_PORT/health"; then
-  echo "Voice backend failed to start. See $VOICE_BACKEND_LOG" >&2
-  exit 1
-fi
-
-echo "Starting voice frontend on http://$VOICE_FRONTEND_HOST:$VOICE_FRONTEND_PORT ..."
-VOICE_API_URL="http://$VOICE_BACKEND_HOST:$VOICE_BACKEND_PORT" \
-  streamlit run frontend/voice_app.py \
-    --server.address "$VOICE_FRONTEND_HOST" \
-    --server.port "$VOICE_FRONTEND_PORT" >"$VOICE_FRONTEND_LOG" 2>&1 &
-VOICE_FRONTEND_PID=$!
-PIDS+=("$VOICE_FRONTEND_PID")
-
-if ! wait_for_http "http://$VOICE_FRONTEND_HOST:$VOICE_FRONTEND_PORT"; then
-  echo "Voice frontend failed to start. See $VOICE_FRONTEND_LOG" >&2
   exit 1
 fi
 
@@ -205,20 +183,15 @@ fi
 
 echo
 echo "Services started:"
-echo "  Email Backend:    http://$BACKEND_HOST:$BACKEND_PORT"
-echo "  Email Frontend:   http://$FRONTEND_HOST:$FRONTEND_PORT"
-echo "  Voice Backend:    http://$VOICE_BACKEND_HOST:$VOICE_BACKEND_PORT"
-echo "  Voice Frontend:   http://$VOICE_FRONTEND_HOST:$VOICE_FRONTEND_PORT"
+echo "  Email Backend:  http://$BACKEND_HOST:$BACKEND_PORT"
+echo "  Next Frontend:  http://$FRONTEND_HOST:$FRONTEND_PORT"
 if [[ "$RUN_STUDIO" -eq 1 ]]; then
-  echo "  Studio API: http://$LANGGRAPH_HOST:$LANGGRAPH_PORT"
-  echo "  Studio UI:  https://smith.langchain.com/studio/?baseUrl=http://$LANGGRAPH_HOST:$LANGGRAPH_PORT"
+  echo "  Studio API:     http://$LANGGRAPH_HOST:$LANGGRAPH_PORT"
 fi
 echo
 echo "Logs:"
 echo "  $BACKEND_LOG"
 echo "  $FRONTEND_LOG"
-echo "  $VOICE_BACKEND_LOG"
-echo "  $VOICE_FRONTEND_LOG"
 if [[ "$RUN_STUDIO" -eq 1 ]]; then
   echo "  $STUDIO_LOG"
 fi
@@ -226,9 +199,9 @@ echo
 echo "Press Ctrl+C to stop all services."
 
 if [[ "$RUN_STUDIO" -eq 1 ]]; then
-  wait_for_any "$BACKEND_PID" "$FRONTEND_PID" "$VOICE_BACKEND_PID" "$VOICE_FRONTEND_PID" "$STUDIO_PID"
+  wait_for_any "$BACKEND_PID" "$FRONTEND_PID" "$STUDIO_PID"
 else
-  wait_for_any "$BACKEND_PID" "$FRONTEND_PID" "$VOICE_BACKEND_PID" "$VOICE_FRONTEND_PID"
+  wait_for_any "$BACKEND_PID" "$FRONTEND_PID"
 fi
 
 echo "A service exited. Shutting down the rest..."

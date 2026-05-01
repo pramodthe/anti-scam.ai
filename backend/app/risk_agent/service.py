@@ -1,19 +1,28 @@
 import logging
 import os
+import threading
+import time
 from datetime import datetime, timezone
-from email.utils import parseaddr
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from backend.app.gmail_service import GmailService
+from backend.app.risk_agent.email_parsing import parse_sender
 from backend.app.risk_agent.graph import EmailRiskGraph, normalize_decision_mode
 from backend.app.risk_agent.llm import RiskLLMScorer
-from backend.app.risk_agent.store import QuarantineStore
+from backend.app.risk_agent.store import ProcessedMessageStore, QuarantineStore
 from backend.app.schemas import (
+    DashboardRecentItem,
+    DashboardSummaryResponse,
+    EmailReviewItem,
     EmailRiskSummary,
     LabelResponse,
     LinkEvaluateResponse,
+    ListEmailReviewItemsResponse,
     ListQuarantineResponse,
+    ManualCheckResponse,
+    ManualResearchSummary,
     QuarantineRecord,
     ReleaseResponse,
     RiskEmailInput,
@@ -39,7 +48,7 @@ class RiskService:
         load_dotenv(Path(__file__).resolve().parents[3] / ".env")
         threshold = float(os.getenv("RISK_THRESHOLD", "0.65"))
         model_version = os.getenv("RISK_MODEL_VERSION", "risk-agent-v1")
-        llm_model = os.getenv("RISK_LLM_MODEL", "gpt-4.1-mini")
+        llm_model = os.getenv("RISK_LLM_MODEL", "936565b3-dfac-4ebf-bb8c-d4ec98ad8039")
         llm_enabled = _env_bool("RISK_LLM_ENABLED", True)
         decision_mode = normalize_decision_mode(os.getenv("RISK_DECISION_MODE", "hybrid"))
         fail_closed = _env_bool("RISK_FAIL_CLOSED", False)
@@ -51,8 +60,15 @@ class RiskService:
         yutori_browse_max_steps = int(os.getenv("YUTORI_BROWSE_MAX_STEPS", "20"))
         quarantine_path = os.getenv("RISK_QUARANTINE_PATH", "data/quarantine.jsonl")
         feedback_path = os.getenv("RISK_FEEDBACK_PATH", "data/training_feedback.jsonl")
+        processed_messages_path = os.getenv("RISK_PROCESSED_MESSAGES_PATH", "data/processed_messages.jsonl")
+        screening_enabled = _env_bool("RISK_SCREENING_ENABLED", True)
+        screening_interval_seconds = int(os.getenv("RISK_SCREENING_INTERVAL_SECONDS", "60"))
+        screening_batch_size = int(os.getenv("RISK_SCREENING_MAX_BATCH_SIZE", "25"))
+        screening_minutes_since = int(os.getenv("RISK_SCREENING_LOOKBACK_MINUTES", "240"))
+        screening_account = os.getenv("RISK_SCREENING_ACCOUNT", "").strip() or os.getenv("GMAIL_ACCOUNT", "").strip()
 
         self.store = QuarantineStore(quarantine_path=quarantine_path, feedback_path=feedback_path)
+        self.processed_store = ProcessedMessageStore(state_path=processed_messages_path)
         self.graph = EmailRiskGraph(
             threshold=threshold,
             model_version=model_version,
@@ -66,6 +82,15 @@ class RiskService:
             link_scan_allow_http=link_scan_allow_http,
             yutori_browse_max_steps=yutori_browse_max_steps,
         )
+        self.gmail_service = GmailService()
+        self.screening_enabled = screening_enabled and bool(screening_account)
+        self.screening_interval_seconds = max(15, screening_interval_seconds)
+        self.screening_batch_size = max(1, screening_batch_size)
+        self.screening_minutes_since = max(1, screening_minutes_since)
+        self.screening_account = screening_account
+        self._scanner_state = "disabled" if not self.screening_enabled else "idle"
+        self._scanner_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
 
     def _from_record(self, record: QuarantineRecord, decision: str) -> RiskEvaluateResponse:
         return RiskEvaluateResponse(
@@ -84,8 +109,43 @@ class RiskService:
         )
 
     @staticmethod
+    def _body_preview(body: str) -> str:
+        preview = " ".join(body.split())
+        return preview[:220]
+
+    def _review_item_from_record(self, record: QuarantineRecord) -> EmailReviewItem:
+        email = record.email
+        return EmailReviewItem(
+            id=record.id,
+            sender_name=record.sender_name,
+            sender_email=record.sender_email or email.from_email,
+            subject=record.subject or email.subject,
+            received_at=email.send_time,
+            body_preview=self._body_preview(email.body),
+            body_full=email.body,
+            description=record.description,
+            risk_score=record.risk_score,
+            risk_reasons=record.risk_reasons,
+            model_version=record.model_version,
+            status=record.status,
+            label=record.label,
+            link_results=record.link_results,
+            link_scan_failed_closed=record.link_scan_failed_closed,
+        )
+
+    def _mark_processed(self, message_id: str, *, decision: str, status: str) -> None:
+        self.processed_store.upsert(
+            {
+                "id": message_id,
+                "decision": decision,
+                "status": status,
+                "updated_at": _utc_now_iso(),
+            }
+        )
+
+    @staticmethod
     def _sender_fields(from_email: str, subject: str) -> tuple[str, str, str]:
-        sender_name, sender_addr = parseaddr(from_email)
+        sender_name, sender_addr = parse_sender(from_email)
         return sender_name.strip(), sender_addr.strip() or from_email.strip(), subject.strip()
 
     def evaluate_email(self, email: RiskEmailInput) -> RiskEvaluateResponse:
@@ -127,6 +187,7 @@ class RiskService:
             response.decision,
             response.risk_score,
         )
+        self._mark_processed(response.id, decision=response.decision, status=response.status)
         return response
 
     def list_quarantine(self) -> ListQuarantineResponse:
@@ -170,6 +231,7 @@ class RiskService:
         )
 
         logger.info("risk_labeled id=%s label=%s status=%s", record.id, label, status)
+        self._mark_processed(record.id, decision="quarantine", status=status)
         return LabelResponse(id=record.id, label=label, status=status, updated_at=updated_at)
 
     def release_quarantine(self, message_id: str) -> ReleaseResponse:
@@ -188,6 +250,7 @@ class RiskService:
         self.store.upsert(updated_record)
 
         logger.info("risk_released id=%s", record.id)
+        self._mark_processed(record.id, decision="deliver", status="released")
         return ReleaseResponse(id=record.id, status="released", updated_at=updated_at)
 
     def evaluate_links(
@@ -215,3 +278,152 @@ class RiskService:
             risk_reasons=assessment.risk_flags,
         )
         return LinkEvaluateResponse(email_risk_summary=summary, link_results=link_results)
+
+    def manual_check(
+        self,
+        *,
+        sender_email: str,
+        company_name: str,
+        subject: str,
+        body: str,
+        urls: list[str] | None = None,
+    ) -> ManualCheckResponse:
+        link_response = self.evaluate_links(
+            sender_email=sender_email,
+            subject=subject,
+            body=body,
+            urls=urls,
+        )
+        research = self.graph.yutori_client.research_text(
+            sender_email=sender_email,
+            company_name=company_name,
+            subject=subject,
+            body=body,
+        )
+        return ManualCheckResponse(
+            email_risk_summary=link_response.email_risk_summary,
+            link_results=link_response.link_results,
+            research=ManualResearchSummary(
+                query=research.query,
+                summary=research.summary,
+                provider=research.provider,
+                executed=research.executed,
+                preview_url=research.preview_url,
+                task_id=research.task_id,
+                details=research.details,
+            ),
+        )
+
+    def list_review_items(self, *, statuses: set[str]) -> ListEmailReviewItemsResponse:
+        records = [
+            self._review_item_from_record(record)
+            for record in self.store.list(include_released=True)
+            if record.status in statuses
+        ]
+        return ListEmailReviewItemsResponse(count=len(records), emails=records)
+
+    def list_scam(self) -> ListEmailReviewItemsResponse:
+        return self.list_review_items(statuses={"confirmed_scam"})
+
+    def list_quarantine_review(self) -> ListEmailReviewItemsResponse:
+        return self.list_review_items(statuses={"pending_human_review"})
+
+    def mark_scam(self, message_id: str) -> LabelResponse:
+        return self.label_quarantine(message_id, 1)
+
+    def mark_non_scam(self, message_id: str) -> ReleaseResponse:
+        self.label_quarantine(message_id, 0)
+        return self.release_quarantine(message_id)
+
+    def remove_from_scam(self, message_id: str) -> ReleaseResponse:
+        return self.mark_non_scam(message_id)
+
+    def dashboard_summary(self) -> DashboardSummaryResponse:
+        records = self.store.list(include_released=True)
+        recent = sorted(records, key=lambda item: item.updated_at, reverse=True)[:5]
+        false_positive_count = sum(1 for item in records if item.status in {"confirmed_legit", "released"})
+        return DashboardSummaryResponse(
+            screened_count=self.processed_store.count(),
+            quarantined_count=sum(1 for item in records if item.status == "pending_human_review"),
+            confirmed_scam_count=sum(1 for item in records if item.status == "confirmed_scam"),
+            false_positive_count=false_positive_count,
+            last_scan_at=self.processed_store.latest_timestamp(),
+            screening_enabled=self.screening_enabled,
+            scanner_status=self._scanner_state,  # type: ignore[arg-type]
+            recent_high_risk=[
+                DashboardRecentItem(
+                    id=item.id,
+                    subject=item.subject,
+                    sender_name=item.sender_name,
+                    sender_email=item.sender_email,
+                    risk_score=item.risk_score,
+                    status=item.status,
+                    updated_at=item.updated_at,
+                )
+                for item in recent
+            ],
+        )
+
+    def screen_inbox_once(self) -> dict[str, int | str]:
+        if not self.screening_account:
+            return {"processed": 0, "quarantined": 0, "delivered": 0, "skipped": 0, "status": "disabled"}
+
+        emails = self.gmail_service.list_emails(
+            email_address=self.screening_account,
+            minutes_since=self.screening_minutes_since,
+            include_read=True,
+            max_results=self.screening_batch_size,
+        ).emails
+        processed = quarantined = delivered = skipped = 0
+
+        for email in emails:
+            if self.processed_store.contains(email.id):
+                skipped += 1
+                continue
+            result = self.evaluate_email(
+                RiskEmailInput(
+                    id=email.id,
+                    thread_id=email.thread_id,
+                    from_email=email.from_email,
+                    to_email=email.to_email,
+                    subject=email.subject,
+                    body=email.body,
+                    send_time=email.send_time,
+                    headers=None,
+                )
+            )
+            processed += 1
+            if result.decision == "quarantine":
+                quarantined += 1
+            else:
+                delivered += 1
+
+        return {
+            "processed": processed,
+            "quarantined": quarantined,
+            "delivered": delivered,
+            "skipped": skipped,
+            "status": "ok",
+        }
+
+    def _screening_loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._scanner_state = "running"
+            try:
+                self.screen_inbox_once()
+            except Exception:
+                logger.exception("background_screening_failed")
+            self._scanner_state = "idle" if self.screening_enabled else "disabled"
+            self._stop_event.wait(self.screening_interval_seconds)
+
+    def start_background_screening(self) -> None:
+        if not self.screening_enabled or self._scanner_thread is not None:
+            return
+        self._stop_event.clear()
+        self._scanner_thread = threading.Thread(target=self._screening_loop, name="risk-screening-loop", daemon=True)
+        self._scanner_thread.start()
+
+    def stop_background_screening(self) -> None:
+        self._stop_event.set()
+        self._scanner_thread = None
+        self._scanner_state = "disabled" if not self.screening_enabled else "idle"

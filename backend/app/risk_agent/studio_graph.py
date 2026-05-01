@@ -14,7 +14,7 @@ def _env_bool(name: str, default: bool) -> bool:
 def build_graph():
     threshold = float(os.getenv("RISK_THRESHOLD", "0.65"))
     model_version = os.getenv("RISK_MODEL_VERSION", "risk-agent-v1")
-    llm_model = os.getenv("RISK_LLM_MODEL", "gpt-4.1-mini")
+    llm_model = os.getenv("RISK_LLM_MODEL", "936565b3-dfac-4ebf-bb8c-d4ec98ad8039")
     llm_enabled = _env_bool("RISK_LLM_ENABLED", True)
     decision_mode = normalize_decision_mode(os.getenv("RISK_DECISION_MODE", "hybrid"))
     fail_closed = _env_bool("RISK_FAIL_CLOSED", False)

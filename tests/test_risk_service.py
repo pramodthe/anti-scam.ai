@@ -2,10 +2,10 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from backend.app.risk_agent.service import RiskService
-from backend.app.schemas import RiskEmailInput
+from backend.app.schemas import GmailEmail, RiskEmailInput
 
 
 class RiskServiceTests(unittest.TestCase):
@@ -52,6 +52,40 @@ class RiskServiceTests(unittest.TestCase):
                 self.assertTrue(feedback_path.exists())
                 lines = [line for line in feedback_path.read_text(encoding="utf-8").splitlines() if line]
                 self.assertEqual(len(lines), 1)
+
+    def test_screen_inbox_once_is_deduplicated_by_processed_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {
+                "GMAIL_ACCOUNT": "user@example.com",
+                "RISK_SCREENING_ENABLED": "true",
+                "RISK_SCREENING_ACCOUNT": "user@example.com",
+                "RISK_LLM_ENABLED": "false",
+                "RISK_LINK_SCAN_ENABLED": "false",
+                "RISK_QUARANTINE_PATH": str(Path(tmpdir) / "quarantine.jsonl"),
+                "RISK_FEEDBACK_PATH": str(Path(tmpdir) / "training_feedback.jsonl"),
+                "RISK_PROCESSED_MESSAGES_PATH": str(Path(tmpdir) / "processed_messages.jsonl"),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                service = RiskService()
+                service.gmail_service = Mock()
+                service.gmail_service.list_emails.return_value.emails = [
+                    GmailEmail(
+                        id="msg-screen-1",
+                        thread_id="thread-screen-1",
+                        from_email="PayPal Support <notify@fraud-check.biz>",
+                        to_email="user@example.com",
+                        subject="Urgent: verify your account",
+                        send_time="Fri, 27 Feb 2026 12:00:00 +0000",
+                        body="Immediate action required. Login now.",
+                    )
+                ]
+
+                first = service.screen_inbox_once()
+                second = service.screen_inbox_once()
+
+                self.assertEqual(first["processed"], 1)
+                self.assertEqual(second["processed"], 0)
+                self.assertEqual(second["skipped"], 1)
 
 
 if __name__ == "__main__":

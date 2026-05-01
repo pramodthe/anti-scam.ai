@@ -1,13 +1,12 @@
-from email.utils import parseaddr
 from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from backend.app.risk_agent.email_parsing import parse_sender
 from backend.app.risk_agent.link_scoring import LinkRiskAssessment, assess_link_risk
 from backend.app.risk_agent.links import ExtractedLink, extract_links_from_email
 from backend.app.risk_agent.llm import RiskLLMScorer
 from backend.app.risk_agent.rules import extract_features, score_features
-from backend.app.risk_agent.ssl_check import check_ssl_certificate
 from backend.app.risk_agent.state import EmailRiskState
 from backend.app.risk_agent.yutori_client import YutoriBrowserClient
 from backend.app.schemas import LinkScanResult
@@ -25,8 +24,8 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _sender_domain(from_email: str) -> str:
-    _, addr = parseaddr(from_email)
-    sender = (addr or from_email).lower().strip()
+    _, sender_addr = parse_sender(from_email)
+    sender = (sender_addr or from_email).lower().strip()
     if "@" not in sender:
         return ""
     return sender.split("@", maxsplit=1)[1]
@@ -86,14 +85,16 @@ class EmailRiskGraph:
         workflow.add_node("extract_links", self._extract_links_node)
         workflow.add_node("scan_links", self._scan_links_node)
         workflow.add_node("score_risk", self._score_risk_node)
+        workflow.add_node("ensure_quarantine_yutori", self._ensure_quarantine_yutori_node)
         workflow.add_node("quarantine", self._quarantine_node)
         workflow.add_node("deliver", self._deliver_node)
         workflow.set_entry_point("extract_features")
         workflow.add_edge("extract_features", "extract_links")
         workflow.add_edge("extract_links", "scan_links")
         workflow.add_edge("scan_links", "score_risk")
+        workflow.add_edge("score_risk", "ensure_quarantine_yutori")
         workflow.add_conditional_edges(
-            "score_risk",
+            "ensure_quarantine_yutori",
             self._route_node,
             {"quarantine": "quarantine", "deliver": "deliver"},
         )
@@ -113,6 +114,16 @@ class EmailRiskGraph:
             max_urls=self.link_scan_max_urls,
             allow_http=self.link_scan_allow_http,
         )
+        # Fallback for scam-heavy emails that use only http:// links.
+        if not extracted_links and not self.link_scan_allow_http:
+            fallback_links, fallback_found = extract_links_from_email(
+                email=email,
+                max_urls=self.link_scan_max_urls,
+                allow_http=True,
+            )
+            if fallback_links:
+                extracted_links = fallback_links
+                links_found = fallback_found
         serialized = [
             {"original_url": item.original_url, "normalized_url": item.normalized_url}
             for item in extracted_links
@@ -121,24 +132,21 @@ class EmailRiskGraph:
 
     def _scan_one_link(self, sender_domain: str, extracted: ExtractedLink) -> LinkScanResult:
         yutori = self.yutori_client.scan_url(url=extracted.normalized_url, sender_domain=sender_domain)
-        ssl_target = yutori.final_url or extracted.normalized_url
-        ssl_result = check_ssl_certificate(url=ssl_target, timeout_seconds=float(self.link_scan_timeout_seconds))
-
         risk_flags = list(yutori.risk_flags)
-        if ssl_result.error:
-            risk_flags.append(ssl_result.error)
 
         return LinkScanResult(
             original_url=extracted.original_url,
             normalized_url=extracted.normalized_url,
-            final_url=yutori.final_url,
+            final_url=yutori.final_url or extracted.normalized_url,
             reachable=yutori.reachable,
             http_status=yutori.http_status,
-            ssl_valid=ssl_result.ssl_valid,
-            ssl_issuer=ssl_result.ssl_issuer,
-            ssl_subject=ssl_result.ssl_subject,
-            ssl_expires_at=ssl_result.ssl_expires_at,
-            ssl_hostname_match=ssl_result.ssl_hostname_match,
+            ssl_valid=yutori.ssl_state == "valid",
+            ssl_state=yutori.ssl_state,
+            ssl_source=yutori.ssl_source,
+            ssl_issuer=yutori.ssl_issuer,
+            ssl_subject=yutori.ssl_subject,
+            ssl_expires_at=yutori.ssl_expires_at,
+            ssl_hostname_match=yutori.ssl_hostname_match,
             yutori_verdict=yutori.verdict,  # type: ignore[arg-type]
             yutori_summary=yutori.summary,
             yutori_provider=yutori.provider,
@@ -233,6 +241,42 @@ class EmailRiskGraph:
             "model_version": self.model_version,
         }
 
+    def _ensure_quarantine_yutori_node(self, state: EmailRiskState) -> EmailRiskState:
+        """Ensure quarantined/suspicious emails get a Yutori run even with no extracted links."""
+        if not self.link_scan_enabled:
+            return {}
+        if str(state.get("decision", "")) != "quarantine":
+            return {}
+        if int(state.get("links_scanned", 0) or 0) > 0:
+            return {}
+
+        email = state["email"]
+        sender_domain = _sender_domain(str(email.get("from_email", "")))
+        if not sender_domain:
+            return {}
+
+        fallback_url = f"https://{sender_domain}"
+        fallback_tag = "quarantine_sender_domain_yutori_fallback"
+        fallback_link = ExtractedLink(original_url=fallback_url, normalized_url=fallback_url)
+        scan_result = self._scan_one_link(sender_domain=sender_domain, extracted=fallback_link)
+        assessment = assess_link_risk(link_results=[scan_result], fail_closed=self.link_scan_fail_closed)
+
+        link_results = list(state.get("link_results", []))
+        link_results.append(scan_result.model_dump())
+        flags = _dedupe(list(state.get("link_risk_flags", [])) + list(assessment.risk_flags) + [fallback_tag])
+        reasons = _dedupe(list(state.get("risk_reasons", [])) + list(assessment.risk_flags) + [fallback_tag])
+
+        return {
+            "links_found": max(int(state.get("links_found", 0) or 0), 1),
+            "links_scanned": len(link_results),
+            "link_results": link_results,
+            "link_risk_score": assessment.risk_score,
+            "link_risk_flags": flags,
+            "link_force_quarantine": bool(state.get("link_force_quarantine", False) or assessment.force_quarantine),
+            "link_scan_failed_closed": bool(state.get("link_scan_failed_closed", False) or assessment.failed_closed),
+            "risk_reasons": reasons,
+        }
+
     @staticmethod
     def _route_node(state: EmailRiskState) -> str:
         return str(state["decision"])
@@ -288,6 +332,15 @@ class EmailRiskGraph:
             allow_http=self.link_scan_allow_http,
             explicit_urls=urls,
         )
+        if not extracted_links and not self.link_scan_allow_http:
+            fallback_links, _ = extract_links_from_email(
+                email=email,
+                max_urls=self.link_scan_max_urls,
+                allow_http=True,
+                explicit_urls=urls,
+            )
+            if fallback_links:
+                extracted_links = fallback_links
         sender_domain = _sender_domain(sender_email)
         results = [self._scan_one_link(sender_domain=sender_domain, extracted=item) for item in extracted_links]
         assessment = assess_link_risk(link_results=results, fail_closed=self.link_scan_fail_closed)

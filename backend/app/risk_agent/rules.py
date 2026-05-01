@@ -1,5 +1,6 @@
-from email.utils import parseaddr
 from typing import Any
+
+from backend.app.risk_agent.email_parsing import parse_sender
 
 
 COMPANY_DOMAIN_HINTS: dict[str, list[str]] = {
@@ -71,10 +72,7 @@ SUSPICIOUS_TLDS = {".top", ".xyz", ".biz", ".click", ".shop", ".work", ".zip"}
 
 
 def _extract_sender(from_email: str) -> tuple[str, str]:
-    name, addr = parseaddr(from_email)
-    if addr:
-        return name.strip(), addr.lower().strip()
-    return "", from_email.lower().strip()
+    return parse_sender(from_email)
 
 
 def _domain(addr: str) -> str:

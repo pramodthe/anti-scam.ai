@@ -1,0 +1,181 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7f0e4;
+  --foreground: #142033;
+  --card: rgba(255, 255, 255, 0.88);
+  --card-foreground: #152338;
+  --popover: #ffffff;
+  --popover-foreground: #152338;
+  --primary: #2f6fed;
+  --primary-foreground: #f8fbff;
+  --secondary: #f6ebdb;
+  --secondary-foreground: #27405f;
+  --muted: #f8f2e8;
+  --muted-foreground: #6c788d;
+  --accent: #f6dfcb;
+  --accent-foreground: #7a341f;
+  --destructive: #e05d3f;
+  --destructive-foreground: #fff8f4;
+  --border: rgba(20, 32, 51, 0.09);
+  --input: rgba(20, 32, 51, 0.08);
+  --ring: rgba(47, 111, 237, 0.28);
+  --radius: 1.25rem;
+  --safe: #36b37e;
+  --watch: #ecb04d;
+  --threat: #f06f4e;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(47, 111, 237, 0.11), transparent 24%),
+    radial-gradient(circle at 88% 10%, rgba(240, 111, 78, 0.1), transparent 16%),
+    linear-gradient(180deg, #fbf7f0 0%, #f7f0e4 52%, #fbf8f3 100%);
+  color: var(--foreground);
+  font-family: var(--font-sans), sans-serif;
+}
+
+.poster-sheen {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.74), rgba(255,255,255,0.58)),
+    linear-gradient(140deg, rgba(63,140,255,0.12), rgba(255,255,255,0) 42%, rgba(240,111,78,0.12));
+  backdrop-filter: blur(18px);
+}
+
+.threat-grid {
+  background-image:
+    linear-gradient(rgba(24,38,64,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24,38,64,0.05) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.status-safe {
+  background: color-mix(in srgb, var(--safe) 18%, white);
+  color: #176143;
+}
+
+.status-watch {
+  background: color-mix(in srgb, var(--watch) 22%, white);
+  color: #7a4f05;
+}
+
+.status-threat {
+  background: color-mix(in srgb, var(--threat) 18%, white);
+  color: #892e19;
+}
+
+.app-surface {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 1.5rem;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.app-surface-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1rem 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-nav-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 1rem;
+  padding: 0.8rem 0.9rem;
+  text-align: left;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.app-nav-item:hover {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.app-nav-item-active {
+  background: white;
+  box-shadow: 0 10px 26px rgba(27, 41, 66, 0.07);
+}
+
+.mail-row {
+  width: 100%;
+  border-radius: 1rem;
+  border: 1px solid transparent;
+  background: rgba(250, 246, 239, 0.92);
+  padding: 0.95rem 1rem;
+  text-align: left;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    transform 160ms ease;
+}
+
+.mail-row:hover {
+  border-color: rgba(20, 32, 51, 0.08);
+  background: rgba(255, 255, 255, 0.96);
+  transform: translateY(-1px);
+}
+
+.mail-row-active {
+  border-color: rgba(47, 111, 237, 0.22);
+  background: white;
+  box-shadow: 0 10px 24px rgba(47, 111, 237, 0.08);
+}
+
+.section-fade {
+  animation: section-fade 180ms ease;
+}
+
+@keyframes section-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

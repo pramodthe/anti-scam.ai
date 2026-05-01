@@ -17,7 +17,7 @@ cp .env.example .env
 Required:
 1. Gmail OAuth token in `.secrets/token.json`
 2. `.venv-webapp313` activated
-3. `OPENAI_API_KEY` (optional but recommended; if missing, risk scoring falls back to rules only)
+3. `RISK_LLM_API_KEY` (optional but recommended; if missing, risk scoring falls back to rules only)
 
 Optional risk routing controls in `.env`:
 1. `RISK_DECISION_MODE=hybrid` (or `rules_only`, `llm_only`)

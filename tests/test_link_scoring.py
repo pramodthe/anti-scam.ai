@@ -14,6 +14,8 @@ class LinkScoringTests(unittest.TestCase):
                 reachable=True,
                 http_status=200,
                 ssl_valid=True,
+                ssl_state="valid",
+                ssl_source="yutori",
                 ssl_issuer="issuer",
                 ssl_subject="subject",
                 ssl_expires_at="2030-01-01T00:00:00Z",
@@ -37,6 +39,8 @@ class LinkScoringTests(unittest.TestCase):
                 reachable=True,
                 http_status=200,
                 ssl_valid=True,
+                ssl_state="valid",
+                ssl_source="yutori",
                 ssl_issuer="issuer",
                 ssl_subject="subject",
                 ssl_expires_at="2030-01-01T00:00:00Z",
@@ -51,6 +55,58 @@ class LinkScoringTests(unittest.TestCase):
         self.assertTrue(assessment.force_quarantine)
         self.assertTrue(assessment.failed_closed)
         self.assertIn("link_scan_timeout_fail_closed", assessment.risk_flags)
+
+    def test_invalid_ssl_forces_quarantine(self) -> None:
+        results = [
+            LinkScanResult(
+                original_url="https://badcert.example.com",
+                normalized_url="https://badcert.example.com/",
+                final_url="https://badcert.example.com/",
+                reachable=True,
+                http_status=200,
+                ssl_valid=False,
+                ssl_state="invalid",
+                ssl_source="yutori",
+                ssl_issuer="issuer",
+                ssl_subject="subject",
+                ssl_expires_at="2030-01-01T00:00:00Z",
+                ssl_hostname_match=False,
+                yutori_verdict="safe",
+                yutori_summary="Certificate invalid.",
+                risk_flags=[],
+                scan_status="ok",
+            )
+        ]
+        assessment = assess_link_risk(results, fail_closed=True)
+        self.assertTrue(assessment.force_quarantine)
+        self.assertGreaterEqual(float(assessment.risk_score or 0), 0.92)
+        self.assertIn("invalid_ssl_certificate", assessment.risk_flags)
+
+    def test_unknown_ssl_is_suspicious_but_not_forced(self) -> None:
+        results = [
+            LinkScanResult(
+                original_url="https://opaque.example.com",
+                normalized_url="https://opaque.example.com/",
+                final_url="https://opaque.example.com/",
+                reachable=True,
+                http_status=200,
+                ssl_valid=False,
+                ssl_state="unknown",
+                ssl_source="yutori",
+                ssl_issuer="",
+                ssl_subject="",
+                ssl_expires_at=None,
+                ssl_hostname_match=False,
+                yutori_verdict="safe",
+                yutori_summary="No SSL details available.",
+                risk_flags=[],
+                scan_status="ok",
+            )
+        ]
+        assessment = assess_link_risk(results, fail_closed=True)
+        self.assertFalse(assessment.force_quarantine)
+        self.assertGreaterEqual(float(assessment.risk_score or 0), 0.55)
+        self.assertIn("ssl_state_unknown", assessment.risk_flags)
 
 
 if __name__ == "__main__":

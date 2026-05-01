@@ -1,20 +1,21 @@
-# AI Email Risk Agent and Voice Threat Monitor
+# AI Email Risk Agent
 
-This repository runs two independent security services:
+This repository now centers on a quarantine-first email security platform:
 
-- Email security service: Gmail inbox access, phishing/scam scoring, URL scanning, quarantine workflow, and human-in-the-loop labeling.
-- Voice security service: live and batch audio analysis for social-engineering risk signals.
+- Gmail integration via the existing OAuth/env setup
+- Background screening of incoming mail before review
+- AI risk scoring plus Yutori browser-use research for suspicious messages
+- Quarantine, confirmed scam, and manual investigation workflows
+- Next.js operator UI over the FastAPI backend
 
-The app is built with FastAPI + Streamlit, with a LangGraph workflow for email risk decisions.
+The app is built with FastAPI + LangGraph on the backend and Next.js on the frontend.
 
 ## Services
 
 | Service | Default URL | Purpose |
 | --- | --- | --- |
-| Email API | `http://127.0.0.1:8000` | Gmail operations, email risk evaluation, quarantine APIs |
-| Email UI | `http://127.0.0.1:8501` | Inbox triage, quarantine review, label/release actions |
-| Voice API | `http://127.0.0.1:8100` | WebSocket live voice scoring + batch audio scoring |
-| Voice UI | `http://127.0.0.1:8502` | Live mic monitor and batch file upload |
+| Email API | `http://127.0.0.1:8000` | Gmail operations, screening, quarantine, scam, manual check APIs |
+| Next.js UI | `http://127.0.0.1:3000` | Dashboard, Quarantine, Scam, Manual Check |
 | LangGraph dev server (optional) | `http://127.0.0.1:2024` | Graph debugging and Studio integration |
 
 ## High-Level Architecture
@@ -30,12 +31,6 @@ graph TB
         EmailUI --> Feedback[(data/training_feedback.jsonl)]
     end
 
-    subgraph Voice Service
-        Mic[Microphone/Audio File] --> VoiceUI[Voice UI :8502]
-        VoiceUI --> VoiceAPI[Voice API :8100]
-        VoiceAPI --> Modulate[Modulate Velma-2]
-        Modulate --> VoiceAnalyzer[VoiceRiskAnalyzer]
-    end
 ```
 
 ## Email Agent Architecture (LangGraph)
@@ -77,10 +72,8 @@ flowchart LR
 ```mermaid
 flowchart TD
     L1[Extract and normalize URLs] --> L2[Resolve URL reachability]
-    L2 --> L3[Yutori browser task]
-    L2 --> L4[SSL certificate checks]
+    L2 --> L3[Yutori browser task including SSL/TLS trust signals]
     L3 --> L5[Aggregate risk flags]
-    L4 --> L5
     L5 --> L6{force quarantine?}
     L6 -->|yes| L7[quarantine]
     L6 -->|no| L8[continue by score]
@@ -90,53 +83,19 @@ Link risk can be raised by:
 - Yutori verdict (`malicious`, `suspicious`, `unknown`)
 - Unreachable link
 - Timeout/error (optionally fail-closed)
-- Invalid SSL on HTTPS URLs
-
-## Voice Architecture
-
-```mermaid
-sequenceDiagram
-    participant Browser
-    participant VoiceAPI as Voice API
-    participant Velma as Modulate Velma-2
-    participant Analyzer as VoiceRiskAnalyzer
-
-    Browser->>VoiceAPI: WS connect /ws/voice
-    VoiceAPI->>Velma: open streaming session
-    Browser->>VoiceAPI: PCM audio chunks
-    VoiceAPI->>Velma: forward chunks
-    Velma-->>VoiceAPI: utterances
-    VoiceAPI->>Analyzer: process_utterance
-    Analyzer-->>VoiceAPI: alerts + risk_update
-    VoiceAPI-->>Browser: utterance/alert/risk_update
-    Browser->>VoiceAPI: stop
-    VoiceAPI-->>Browser: session_summary
-```
-
-### Voice risk signals
-
-- Reuses email keyword families: urgency, credential phishing, payment fraud, promo scam, impersonation.
-- Adds emotion signals (high-risk and moderate-risk classes).
-- Adds keyword-based PII/PHI mention detection.
-- Final decision thresholds:
-- `safe`: score < `0.65`
-- `suspicious`: `0.65 <= score < 0.85`
-- `threat`: score >= `0.85`
+- Invalid SSL on HTTPS URLs (force quarantine)
+- Unknown SSL state on HTTPS URLs (suspicious score floor `0.55`, no force quarantine by itself)
 
 ## Repository Layout
 
 ```text
 backend/
   api.py
-  voice_api.py
   app/
     api.py
     gmail_client.py
     gmail_service.py
     schemas.py
-    modulate_client.py
-    voice_risk_analyzer.py
-    voice_schemas.py
     risk_agent/
       email_parsing.py
       graph.py
@@ -152,7 +111,10 @@ backend/
       yutori_client.py
 frontend/
   streamlit_app.py
-  voice_app.py
+frontend-next/
+  app/
+  components/
+  lib/
 scripts/
   setup_gmail.py
   batch_test_live.py
@@ -178,7 +140,7 @@ source .venv-webapp313/bin/activate
 python -m pip install --upgrade pip
 ```
 
-### 2) Install dependencies
+### 2) Install backend dependencies
 
 ```bash
 python -m pip install -r requirements-webapp.txt
@@ -209,6 +171,13 @@ This creates `.secrets/token.json`.
 
 See also [GMAIL_SETUP.md](/Users/pramodthebe/Desktop/websecurity/GMAIL_SETUP.md).
 
+### 3) Install frontend dependencies
+
+```bash
+cd /Users/pramodthebe/Desktop/websecurity/frontend-next
+npm install
+```
+
 ## Runtime
 
 ### Start all services
@@ -217,8 +186,6 @@ See also [GMAIL_SETUP.md](/Users/pramodthebe/Desktop/websecurity/GMAIL_SETUP.md)
 source .venv-webapp313/bin/activate
 bash run.sh
 ```
-
-Optional flags:
 - `--no-studio`
 - `--tunnel`
 
@@ -233,13 +200,6 @@ uvicorn backend.api:app --host 127.0.0.1 --port 8000 --reload
 # Email UI
 EMAIL_ASSISTANT_API=http://127.0.0.1:8000 \
 streamlit run frontend/streamlit_app.py --server.address 127.0.0.1 --server.port 8501
-
-# Voice API
-uvicorn backend.voice_api:app --host 127.0.0.1 --port 8100 --reload
-
-# Voice UI
-VOICE_API_URL=http://127.0.0.1:8100 \
-streamlit run frontend/voice_app.py --server.address 127.0.0.1 --server.port 8502
 
 # LangGraph dev server
 langgraph dev --config langgraph.json --host 127.0.0.1 --port 2024 --no-browser
@@ -261,14 +221,6 @@ langgraph dev --config langgraph.json --host 127.0.0.1 --port 2024 --no-browser
 | `GET` | `/risk/quarantine/{message_id}` | Get single quarantine record |
 | `POST` | `/risk/quarantine/{message_id}/label` | Label record (`0` legit, `1` scam) |
 | `POST` | `/risk/quarantine/{message_id}/release` | Release from quarantine |
-
-### Voice API (`:8100`)
-
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Voice health + Modulate configuration flags |
-| `WS` | `/ws/voice` | Real-time PCM audio streaming and risk updates |
-| `POST` | `/voice/analyze` | Batch audio upload and scoring |
 
 ### Sample payload: email evaluation
 
@@ -298,6 +250,23 @@ langgraph dev --config langgraph.json --host 127.0.0.1 --port 2024 --no-browser
 }
 ```
 
+### LinkScanResult SSL/TLS fields
+
+`/risk/emails/evaluate` and `/risk/links/evaluate` now expose:
+- `ssl_state`: `valid` | `invalid` | `unknown`
+- `ssl_source`: provider/source for SSL trust signal (currently `yutori`)
+
+Compatibility fields remain:
+- `ssl_valid`
+- `ssl_issuer`
+- `ssl_subject`
+- `ssl_expires_at`
+- `ssl_hostname_match`
+
+Semantic note:
+- `ssl_valid=true` only when `ssl_state=valid`.
+- `ssl_valid=false` can mean either `ssl_state=invalid` or `ssl_state=unknown`; use `ssl_state` for exact behavior.
+
 ## Environment Variables
 
 ### App wiring
@@ -305,7 +274,6 @@ langgraph dev --config langgraph.json --host 127.0.0.1 --port 2024 --no-browser
 | Variable | Default |
 | --- | --- |
 | `EMAIL_ASSISTANT_API` | `http://127.0.0.1:8000` |
-| `VOICE_API_URL` | `http://127.0.0.1:8100` |
 | `GMAIL_ACCOUNT` | empty |
 | `EMAIL_DEFAULT_TO` | empty |
 
@@ -355,8 +323,6 @@ langgraph dev --config langgraph.json --host 127.0.0.1 --port 2024 --no-browser
 - `VENV_PATH`
 - `BACKEND_HOST`, `BACKEND_PORT`
 - `FRONTEND_HOST`, `FRONTEND_PORT`
-- `VOICE_BACKEND_HOST`, `VOICE_BACKEND_PORT`
-- `VOICE_FRONTEND_HOST`, `VOICE_FRONTEND_PORT`
 - `LANGGRAPH_HOST`, `LANGGRAPH_PORT`
 
 ## Data and HITL workflow
@@ -384,13 +350,7 @@ PYTHONPATH=. .venv-webapp313/bin/pytest -q
 ```
 
 Current suite passes:
-- 41 tests passed locally.
-
-## Code Review Notes (Current State)
-
-1. `run.sh --no-studio` still checks for `langgraph` binary before startup.
-2. Voice `session_summary` UI expects `session_duration_ms`, but backend summary does not currently provide it.
-3. Voice PII/PHI detection is keyword-based (not model-based NER).
+- 49 tests passed locally.
 
 ## License
 

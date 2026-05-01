@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>anti-scam.ai</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Unified Fraud Defense</p>
+          <h1>anti-scam.ai</h1>
+          <p class="hero-sub">
+            A bright operator console for email triage, link investigation, and quarantine review.
+          </p>
+          <div class="hero-actions">
+            <button class="primary-action" data-jump="#triage">Open Triage</button>
+            <button class="ghost-action" data-jump="#link-lab">Open Link Lab</button>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="halo halo-one"></div>
+          <div class="halo halo-two"></div>
+          <div class="signal-grid">
+            <div>
+              <small>Safe inbox</small>
+              <strong id="hero-safe">0</strong>
+            </div>
+            <div>
+              <small>Threat queue</small>
+              <strong id="hero-threats">0</strong>
+            </div>
+            <div>
+              <small>Links scanned</small>
+              <strong id="hero-links">0</strong>
+            </div>
+            <div>
+              <small>Mode</small>
+              <strong>Email defense</strong>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="posture-strip reveal">
+          <article>
+            <span>Email API</span>
+            <strong id="email-api-status">checking</strong>
+          </article>
+          <article>
+            <span>Operator Mode</span>
+            <strong>Human in the loop</strong>
+          </article>
+          <article>
+            <span>Surface</span>
+            <strong>Email only</strong>
+          </article>
+          <article>
+            <span>Manual Investigation</span>
+            <strong>Link lab ready</strong>
+          </article>
+        </section>
+
+        <section class="section-head reveal" id="triage">
+          <div>
+            <p class="eyebrow">Email Operations</p>
+            <h2>Triage Workspace</h2>
+            <p>Scan a Gmail account, clear safe mail, and route risky traffic into quarantine.</p>
+          </div>
+        </section>
+
+        <section class="grid-two reveal">
+          <form class="panel form-panel" id="scan-form">
+            <div class="panel-head">
+              <h3>Inbox Scan</h3>
+              <p>Pull recent messages and evaluate them against the risk engine.</p>
+            </div>
+            <label>
+              Gmail account
+              <input type="email" name="email_address" placeholder="you@example.com" required />
+            </label>
+            <div class="split-fields">
+              <label>
+                Window in minutes
+                <input type="number" name="minutes_since" min="1" max="10080" value="1440" />
+              </label>
+              <label>
+                Max results
+                <input type="number" name="max_results" min="1" max="100" value="25" />
+              </label>
+            </div>
+            <label class="check">
+              <input type="checkbox" name="include_read" checked />
+              Include read messages
+            </label>
+            <button class="primary-action" type="submit">Scan inbox</button>
+          </form>
+
+          <form class="panel form-panel" id="compose-form">
+            <div class="panel-head">
+              <h3>Send Test Email</h3>
+              <p>Use the connected Gmail account to push a message through the pipeline.</p>
+            </div>
+            <label>
+              To
+              <input type="email" name="to" placeholder="recipient@example.com" required />
+            </label>
+            <label>
+              Subject
+              <input type="text" name="subject" placeholder="Subject" />
+            </label>
+            <label>
+              Body
+              <textarea name="body" rows="6" placeholder="Write a message"></textarea>
+            </label>
+            <button class="primary-action" type="submit">Send email</button>
+          </form>
+        </section>
+
+        <section class="metrics-band reveal">
+          <article>
+            <span>Safe Inbox</span>
+            <strong id="metric-safe">0</strong>
+          </article>
+          <article>
+            <span>Threat Queue</span>
+            <strong id="metric-threats">0</strong>
+          </article>
+          <article>
+            <span>Links Scanned</span>
+            <strong id="metric-links">0</strong>
+          </article>
+          <article>
+            <span>Risk Failures</span>
+            <strong id="metric-failures">0</strong>
+          </article>
+        </section>
+
+        <section class="section-head reveal">
+          <div>
+            <p class="eyebrow">Cleared Mail</p>
+            <h2>Inbox Feed</h2>
+            <p>Messages that passed automated review stay here with their evidence attached.</p>
+          </div>
+          <label class="search-box">
+            <span>Filter</span>
+            <input id="safe-search" type="search" placeholder="Search sender, subject, or body" />
+          </label>
+        </section>
+
+        <section class="feed reveal" id="safe-feed"></section>
+
+        <section class="section-head reveal">
+          <div>
+            <p class="eyebrow">Human Review</p>
+            <h2>Threat Queue</h2>
+            <p>Confirm scams, release legitimate mail, and keep the training loop accurate.</p>
+          </div>
+          <label class="search-box">
+            <span>Filter</span>
+            <input id="threat-search" type="search" placeholder="Search sender, subject, or reason" />
+          </label>
+        </section>
+
+        <section class="feed reveal" id="threat-feed"></section>
+
+        <section class="section-head reveal" id="link-lab">
+          <div>
+            <p class="eyebrow">Investigation</p>
+            <h2>Link Lab</h2>
+            <p>Run a manual URL analysis without waiting for an inbox fetch.</p>
+          </div>
+        </section>
+
+        <section class="grid-two reveal">
+          <form class="panel form-panel" id="link-form">
+            <div class="panel-head">
+              <h3>Manual Link Scan</h3>
+              <p>Paste the message context and any suspicious links.</p>
+            </div>
+            <label>
+              Sender email
+              <input type="email" name="sender_email" placeholder="alerts@bank-example.com" required />
+            </label>
+            <label>
+              Subject
+              <input type="text" name="subject" placeholder="Urgent password reset" />
+            </label>
+            <label>
+              Message body
+              <textarea name="body" rows="5" placeholder="Paste the message body"></textarea>
+            </label>
+            <label>
+              URLs
+              <textarea name="urls" rows="5" placeholder="One URL per line"></textarea>
+            </label>
+            <button class="primary-action" type="submit">Run analysis</button>
+          </form>
+
+          <div class="panel lab-output" id="link-output">
+            <div class="panel-head">
+              <h3>Link Findings</h3>
+              <p>Results appear here after a manual investigation.</p>
+            </div>
+            <div id="link-output-body" class="empty-state">
+              Manual URL verdicts, SSL state, and browser intelligence will appear here.
+            </div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+    <div class="toast-stack" id="toast-stack"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

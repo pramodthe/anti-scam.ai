@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import backend.app.api as api_module
 from backend.app.risk_agent.service import RiskService
+from backend.app.risk_agent.yutori_client import YutoriScanResult
 from backend.app.schemas import DeleteEmailResponse, GmailEmail, ListEmailsResponse, SendEmailResponse
 
 
@@ -58,6 +59,14 @@ class RiskApiTests(unittest.TestCase):
                     self.assertEqual(list_resp.status_code, 200)
                     self.assertEqual(list_resp.json()["count"], 1)
 
+                    dashboard_resp = client.get("/dashboard/summary")
+                    self.assertEqual(dashboard_resp.status_code, 200)
+                    self.assertIn("quarantined_count", dashboard_resp.json())
+
+                    quarantine_resp = client.get("/emails/quarantine")
+                    self.assertEqual(quarantine_resp.status_code, 200)
+                    self.assertEqual(quarantine_resp.json()["count"], 1)
+
                     detail_resp = client.get("/risk/quarantine/msg-api-1")
                     self.assertEqual(detail_resp.status_code, 200)
                     self.assertEqual(detail_resp.json()["id"], "msg-api-1")
@@ -68,6 +77,27 @@ class RiskApiTests(unittest.TestCase):
                     valid_label = client.post("/risk/quarantine/msg-api-1/label", json={"label": 1})
                     self.assertEqual(valid_label.status_code, 200)
                     self.assertEqual(valid_label.json()["label"], 1)
+
+                    scam_resp = client.get("/emails/scam")
+                    self.assertEqual(scam_resp.status_code, 200)
+                    self.assertEqual(scam_resp.json()["count"], 1)
+
+                    remove_resp = client.post("/emails/msg-api-1/remove-from-scam", json={})
+                    self.assertEqual(remove_resp.status_code, 200)
+                    self.assertEqual(remove_resp.json()["status"], "released")
+
+                    manual_resp = client.post(
+                        "/manual-check",
+                        json={
+                            "sender_email": "alerts@example.com",
+                            "company_name": "PayPal",
+                            "subject": "check",
+                            "body": "open https://example.com",
+                            "urls": ["https://example.com"],
+                        },
+                    )
+                    self.assertEqual(manual_resp.status_code, 200)
+                    self.assertIn("research", manual_resp.json())
 
                     release_resp = client.post("/risk/quarantine/msg-api-1/release", json={})
                     self.assertEqual(release_resp.status_code, 200)
@@ -120,6 +150,59 @@ class RiskApiTests(unittest.TestCase):
                 delete_gmail = client.delete("/gmail/emails/msg-gmail-1")
                 self.assertEqual(delete_gmail.status_code, 200)
                 self.assertEqual(delete_gmail.json()["status"], "trashed")
+
+    def test_links_evaluate_includes_ssl_state_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = {
+                "RISK_THRESHOLD": "0.65",
+                "RISK_LLM_ENABLED": "false",
+                "RISK_LINK_SCAN_ENABLED": "true",
+                "RISK_LINK_SCAN_FAIL_CLOSED": "true",
+                "RISK_QUARANTINE_PATH": str(Path(tmpdir) / "quarantine.jsonl"),
+                "RISK_FEEDBACK_PATH": str(Path(tmpdir) / "training_feedback.jsonl"),
+            }
+            with patch.dict(os.environ, env, clear=False):
+                risk_service = RiskService()
+                with patch.object(
+                    risk_service.graph.yutori_client,
+                    "scan_url",
+                    return_value=YutoriScanResult(
+                        final_url="https://example.com",
+                        reachable=True,
+                        http_status=200,
+                        verdict="safe",
+                        summary="Looks legitimate.",
+                        risk_flags=[],
+                        scan_status="ok",
+                        ssl_state="valid",
+                        ssl_source="yutori",
+                        ssl_issuer="issuer",
+                        ssl_subject="subject",
+                        ssl_expires_at="2030-01-01T00:00:00Z",
+                        ssl_hostname_match=True,
+                    ),
+                ), patch.object(api_module, "risk", risk_service):
+                    client = TestClient(api_module.app)
+                    links_resp = client.post(
+                        "/risk/links/evaluate",
+                        json={
+                            "sender_email": "alerts@example.com",
+                            "subject": "check",
+                            "body": "open https://example.com",
+                            "urls": ["https://example.com"],
+                        },
+                    )
+                    self.assertEqual(links_resp.status_code, 200)
+                    payload = links_resp.json()
+                    self.assertIn("email_risk_summary", payload)
+                    self.assertEqual(len(payload["link_results"]), 1)
+                    first = payload["link_results"][0]
+                    self.assertIn("ssl_state", first)
+                    self.assertIn("ssl_source", first)
+                    self.assertIn("ssl_valid", first)
+                    self.assertIn("ssl_issuer", first)
+                    self.assertEqual(first["ssl_state"], "valid")
+                    self.assertEqual(first["ssl_source"], "yutori")
 
 
 if __name__ == "__main__":

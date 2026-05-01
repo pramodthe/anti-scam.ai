@@ -7,6 +7,4 @@ langgraph
 langchain
 langchain-openai
 openai
-websockets
 httpx
-python-multipart
