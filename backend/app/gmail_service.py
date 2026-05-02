@@ -1,5 +1,5 @@
 from backend.app.gmail_client import GmailClient
-from backend.app.schemas import DeleteEmailResponse, GmailEmail, ListEmailsResponse, SendEmailResponse
+from backend.app.schemas import DeleteEmailResponse, GmailEmail, GmailProfileResponse, ListEmailsResponse, SendEmailResponse
 
 
 class GmailService:
@@ -9,13 +9,20 @@ class GmailService:
         self.client = GmailClient()
 
     def list_emails(
-        self, email_address: str, minutes_since: int = 1440, include_read: bool = True, max_results: int = 25
+        self,
+        email_address: str,
+        minutes_since: int = 1440,
+        include_read: bool = True,
+        max_results: int = 25,
+        *,
+        inbox_wide: bool = False,
     ) -> ListEmailsResponse:
         emails = self.client.list_emails(
             email_address=email_address,
             minutes_since=minutes_since,
             include_read=include_read,
             max_results=max_results,
+            inbox_wide=inbox_wide,
         )
         return ListEmailsResponse(count=len(emails), emails=[GmailEmail(**e) for e in emails])
 
@@ -26,3 +33,7 @@ class GmailService:
     def delete_email(self, message_id: str) -> DeleteEmailResponse:
         self.client.delete_email(message_id=message_id)
         return DeleteEmailResponse(message_id=message_id, status="trashed")
+
+    def get_profile(self) -> GmailProfileResponse:
+        email = self.client.get_profile_email()
+        return GmailProfileResponse(email_address=email)

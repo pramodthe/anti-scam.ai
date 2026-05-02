@@ -8,7 +8,9 @@ import type {
   RiskEvaluation,
 } from "@/lib/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_EMAIL_API_BASE ?? "http://127.0.0.1:8000";
+export const EMAIL_API_BASE = process.env.NEXT_PUBLIC_EMAIL_API_BASE ?? "http://127.0.0.1:8000";
+
+const API_BASE = EMAIL_API_BASE;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -30,6 +32,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function getHealth(): Promise<{ status: string }> {
   return request("/health");
+}
+
+export type GoogleSetupStatus = {
+  has_oauth_client: boolean;
+  has_refresh_token: boolean;
+  connected_email: string | null;
+  redirect_uri: string;
+};
+
+export async function getGoogleSetupStatus(): Promise<GoogleSetupStatus> {
+  return request("/setup/google/status");
+}
+
+export async function saveGoogleOAuthClient(payload: { client_id: string; client_secret: string }): Promise<{ status: string }> {
+  return request("/setup/google/oauth-client", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Opens in same window — user completes Google login and returns to /setup */
+export function googleOAuthStartUrl(): string {
+  return `${EMAIL_API_BASE}/auth/google/start`;
 }
 
 export async function getDashboardSummary(): Promise<DashboardSummary> {
@@ -127,6 +152,14 @@ export async function runScreening() {
       body: JSON.stringify({}),
     },
   );
+}
+
+/** Call after OAuth or if screening stayed disabled — picks up mailbox from token without API restart */
+export async function reloadScreeningAccount(): Promise<{ screening_enabled: boolean; mailbox: string }> {
+  return request("/screening/reload-account", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function evaluateLinks(payload: {

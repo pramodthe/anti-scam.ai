@@ -427,6 +427,116 @@ class YutoriBrowserClient:
                 ssl_source="unknown",
             )
 
+        try:
+            task_id, start_preview_url, start_details = self._start_task(start_url=target_url, sender_domain=sender_domain)
+            verdict, summary, flags, scan_status, poll_preview_url, poll_details = self._poll_task(task_id=task_id)
+            ssl_state, ssl_issuer, ssl_subject, ssl_expires_at, ssl_hostname_match = _extract_ssl_observations(
+                {
+                    "start": start_details or {},
+                    "poll": poll_details or {},
+                    "summary": summary,
+                }
+            )
+            if not reachable:
+                flags.append("link_unreachable")
+            if ssl_state == "invalid":
+                flags.append("yutori_invalid_ssl_certificate")
+            elif ssl_state == "unknown":
+                flags.append("yutori_ssl_unknown")
+            return YutoriScanResult(
+                final_url=target_url,
+                reachable=reachable or scan_status == "ok",
+                http_status=http_status,
+                verdict=verdict,
+                summary=summary,
+                provider="yutori_api",
+                executed=True,
+                task_id=task_id,
+                preview_url=poll_preview_url or start_preview_url,
+                details=poll_details or start_details,
+                risk_flags=_dedupe(flags),
+                scan_status=scan_status,
+                ssl_state=ssl_state,
+                ssl_source="yutori",
+                ssl_issuer=ssl_issuer,
+                ssl_subject=ssl_subject,
+                ssl_expires_at=ssl_expires_at,
+                ssl_hostname_match=ssl_hostname_match,
+            )
+        except requests.Timeout:
+            return YutoriScanResult(
+                final_url=target_url,
+                reachable=reachable,
+                http_status=http_status,
+                verdict="unknown",
+                summary="Yutori request timeout",
+                provider="yutori_api",
+                executed=False,
+                task_id=None,
+                preview_url=None,
+                details={
+                    "provider": "yutori_api",
+                    "executed": False,
+                    "reason": "yutori_request_timeout",
+                    "precheck_reachable": reachable,
+                },
+                risk_flags=_dedupe(precheck_flags + ["yutori_request_timeout", "yutori_ssl_unknown"]),
+                scan_status="timeout",
+                ssl_state="unknown",
+                ssl_source="unknown",
+            )
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else "unknown"
+            response_text = ""
+            if exc.response is not None:
+                response_text = (exc.response.text or "").strip()
+            http_details: dict[str, Any] = {
+                "provider": "yutori_api",
+                "executed": False,
+                "reason": "yutori_http_error",
+                "status_code": status_code,
+            }
+            if response_text:
+                http_details["response"] = response_text[:500]
+            return YutoriScanResult(
+                final_url=target_url,
+                reachable=reachable,
+                http_status=http_status,
+                verdict="unknown",
+                summary=f"Yutori HTTP error {status_code}",
+                provider="yutori_api",
+                executed=False,
+                task_id=None,
+                preview_url=None,
+                details=http_details,
+                risk_flags=_dedupe(precheck_flags + ["yutori_http_error", "yutori_ssl_unknown"]),
+                scan_status="error",
+                ssl_state="unknown",
+                ssl_source="unknown",
+            )
+        except Exception as exc:
+            return YutoriScanResult(
+                final_url=target_url,
+                reachable=reachable,
+                http_status=http_status,
+                verdict="unknown",
+                summary=f"Yutori error: {exc}",
+                provider="yutori_api",
+                executed=False,
+                task_id=None,
+                preview_url=None,
+                details={
+                    "provider": "yutori_api",
+                    "executed": False,
+                    "reason": "yutori_error",
+                    "precheck_reachable": reachable,
+                },
+                risk_flags=_dedupe(precheck_flags + ["yutori_error", "yutori_ssl_unknown"]),
+                scan_status="error",
+                ssl_state="unknown",
+                ssl_source="unknown",
+            )
+
     def research_text(
         self,
         *,
@@ -497,114 +607,4 @@ class YutoriBrowserClient:
                 summary=f"Yutori research failed: {exc}",
                 executed=False,
                 details={"reason": "yutori_research_error"},
-            )
-
-        try:
-            task_id, start_preview_url, start_details = self._start_task(start_url=target_url, sender_domain=sender_domain)
-            verdict, summary, flags, scan_status, poll_preview_url, poll_details = self._poll_task(task_id=task_id)
-            ssl_state, ssl_issuer, ssl_subject, ssl_expires_at, ssl_hostname_match = _extract_ssl_observations(
-                {
-                    "start": start_details or {},
-                    "poll": poll_details or {},
-                    "summary": summary,
-                }
-            )
-            if not reachable:
-                flags.append("link_unreachable")
-            if ssl_state == "invalid":
-                flags.append("yutori_invalid_ssl_certificate")
-            elif ssl_state == "unknown":
-                flags.append("yutori_ssl_unknown")
-            return YutoriScanResult(
-                final_url=target_url,
-                reachable=reachable or scan_status == "ok",
-                http_status=http_status,
-                verdict=verdict,
-                summary=summary,
-                provider="yutori_api",
-                executed=True,
-                task_id=task_id,
-                preview_url=poll_preview_url or start_preview_url,
-                details=poll_details or start_details,
-                risk_flags=_dedupe(flags),
-                scan_status=scan_status,
-                ssl_state=ssl_state,
-                ssl_source="yutori",
-                ssl_issuer=ssl_issuer,
-                ssl_subject=ssl_subject,
-                ssl_expires_at=ssl_expires_at,
-                ssl_hostname_match=ssl_hostname_match,
-            )
-        except requests.Timeout:
-            return YutoriScanResult(
-                final_url=target_url,
-                reachable=reachable,
-                http_status=http_status,
-                verdict="unknown",
-                summary="Yutori request timeout",
-                provider="yutori_api",
-                executed=False,
-                task_id=None,
-                preview_url=None,
-                details={
-                    "provider": "yutori_api",
-                    "executed": False,
-                    "reason": "yutori_request_timeout",
-                    "precheck_reachable": reachable,
-                },
-                risk_flags=_dedupe(precheck_flags + ["yutori_request_timeout", "yutori_ssl_unknown"]),
-                scan_status="timeout",
-                ssl_state="unknown",
-                ssl_source="unknown",
-            )
-        except requests.HTTPError as exc:
-            status_code = exc.response.status_code if exc.response is not None else "unknown"
-            response_text = ""
-            if exc.response is not None:
-                response_text = (exc.response.text or "").strip()
-            details: dict[str, Any] = {
-                "provider": "yutori_api",
-                "executed": False,
-                "reason": "yutori_http_error",
-                "status_code": status_code,
-            }
-            if response_text:
-                details["response"] = response_text[:500]
-            return YutoriScanResult(
-                final_url=target_url,
-                reachable=reachable,
-                http_status=http_status,
-                verdict="unknown",
-                summary=f"Yutori HTTP error {status_code}",
-                provider="yutori_api",
-                executed=False,
-                task_id=None,
-                preview_url=None,
-                details=details,
-                risk_flags=_dedupe(precheck_flags + ["yutori_http_error", "yutori_ssl_unknown"]),
-                scan_status="error",
-                ssl_state="unknown",
-                ssl_source="unknown",
-            )
-        except Exception as exc:
-            return YutoriScanResult(
-                final_url=target_url,
-                reachable=reachable,
-                http_status=http_status,
-                verdict="unknown",
-                summary=f"Yutori error: {exc}",
-                provider="yutori_api",
-                executed=False,
-                task_id=None,
-                preview_url=None,
-                details={
-                    "provider": "yutori_api",
-                    "executed": False,
-                    "reason": "yutori_error",
-                    "precheck_reachable": reachable,
-                },
-                risk_flags=_dedupe(precheck_flags + ["yutori_error", "yutori_ssl_unknown"]),
-                scan_status="error",
-                ssl_state="unknown",
-                ssl_source="unknown",
             )

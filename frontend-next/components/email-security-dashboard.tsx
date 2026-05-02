@@ -2,6 +2,7 @@
 
 import type { FormEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
@@ -12,6 +13,7 @@ import {
   MailWarning,
   RefreshCw,
   ScanSearch,
+  Settings,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
@@ -523,6 +525,13 @@ export function EmailSecurityDashboard() {
               label="Manual Check"
               onClick={() => setActiveSection("manual")}
             />
+            <Link
+              href="/setup"
+              className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            >
+              <Settings className="size-4 shrink-0" />
+              Gmail setup
+            </Link>
           </div>
 
           <div className="mt-6 rounded-[24px] border border-border bg-white px-4 py-4">
@@ -536,6 +545,11 @@ export function EmailSecurityDashboard() {
             <div className="mt-2 text-sm leading-6 text-muted-foreground">
               Screening {dashboard?.screening_enabled ? "enabled" : "disabled"}.
             </div>
+            {dashboard?.gmail_connected_email ? (
+              <div className="mt-2 truncate text-sm leading-6 text-muted-foreground" title={dashboard.gmail_connected_email}>
+                Mailbox: {dashboard.gmail_connected_email}
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-4 rounded-[24px] border border-border bg-white px-4 py-4">
@@ -700,8 +714,8 @@ export function EmailSecurityDashboard() {
             ) : null}
 
             {activeSection === "quarantine" ? (
-              <div className="section-fade grid h-full min-h-0 gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-                <div className="app-surface">
+              <div className="section-fade grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(260px,1fr)_minmax(0,32rem)]">
+                <div className="app-surface min-w-0">
                   <div className="app-surface-header">
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Queue</div>
@@ -720,7 +734,7 @@ export function EmailSecurityDashboard() {
                   </div>
                 </div>
 
-                <div className="app-surface overflow-hidden">
+                <div className="app-surface min-w-0 overflow-hidden">
                   <EmailPreview
                     email={selectedQuarantine}
                     primaryAction={
@@ -748,8 +762,8 @@ export function EmailSecurityDashboard() {
             ) : null}
 
             {activeSection === "scam" ? (
-              <div className="section-fade grid h-full min-h-0 gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-                <div className="app-surface">
+              <div className="section-fade grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(260px,1fr)_minmax(0,32rem)]">
+                <div className="app-surface min-w-0">
                   <div className="app-surface-header">
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Registry</div>
@@ -768,7 +782,7 @@ export function EmailSecurityDashboard() {
                   </div>
                 </div>
 
-                <div className="app-surface overflow-hidden">
+                <div className="app-surface min-w-0 overflow-hidden">
                   <EmailPreview
                     email={selectedScam}
                     primaryAction={

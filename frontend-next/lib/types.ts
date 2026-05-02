@@ -96,6 +96,7 @@ export type DashboardSummary = {
   false_positive_count: number;
   last_scan_at?: string | null;
   screening_enabled: boolean;
+  gmail_connected_email?: string | null;
   scanner_status: "idle" | "running" | "disabled";
   recent_high_risk: Array<{
     id: string;

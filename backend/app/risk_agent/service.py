@@ -7,6 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from backend.app.gmail_client import resolve_gmail_account_email
 from backend.app.gmail_service import GmailService
 from backend.app.risk_agent.email_parsing import parse_sender
 from backend.app.risk_agent.graph import EmailRiskGraph, normalize_decision_mode
@@ -61,11 +62,11 @@ class RiskService:
         quarantine_path = os.getenv("RISK_QUARANTINE_PATH", "data/quarantine.jsonl")
         feedback_path = os.getenv("RISK_FEEDBACK_PATH", "data/training_feedback.jsonl")
         processed_messages_path = os.getenv("RISK_PROCESSED_MESSAGES_PATH", "data/processed_messages.jsonl")
-        screening_enabled = _env_bool("RISK_SCREENING_ENABLED", True)
+        screening_enabled_env = _env_bool("RISK_SCREENING_ENABLED", True)
         screening_interval_seconds = int(os.getenv("RISK_SCREENING_INTERVAL_SECONDS", "60"))
         screening_batch_size = int(os.getenv("RISK_SCREENING_MAX_BATCH_SIZE", "25"))
         screening_minutes_since = int(os.getenv("RISK_SCREENING_LOOKBACK_MINUTES", "240"))
-        screening_account = os.getenv("RISK_SCREENING_ACCOUNT", "").strip() or os.getenv("GMAIL_ACCOUNT", "").strip()
+        screening_account = (resolve_gmail_account_email() or "").strip()
 
         self.store = QuarantineStore(quarantine_path=quarantine_path, feedback_path=feedback_path)
         self.processed_store = ProcessedMessageStore(state_path=processed_messages_path)
@@ -83,7 +84,8 @@ class RiskService:
             yutori_browse_max_steps=yutori_browse_max_steps,
         )
         self.gmail_service = GmailService()
-        self.screening_enabled = screening_enabled and bool(screening_account)
+        self._screening_enabled_by_env = screening_enabled_env
+        self.screening_enabled = screening_enabled_env and bool(screening_account)
         self.screening_interval_seconds = max(15, screening_interval_seconds)
         self.screening_batch_size = max(1, screening_batch_size)
         self.screening_minutes_since = max(1, screening_minutes_since)
@@ -91,6 +93,16 @@ class RiskService:
         self._scanner_state = "disabled" if not self.screening_enabled else "idle"
         self._scanner_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+
+    def refresh_screening_account(self) -> dict[str, bool | str]:
+        """Re-read mailbox from env/token (call after OAuth saves token.json while API is running)."""
+        load_dotenv(Path(__file__).resolve().parents[3] / ".env")
+        self.screening_account = (resolve_gmail_account_email() or "").strip()
+        self.screening_enabled = self._screening_enabled_by_env and bool(self.screening_account)
+        self._scanner_state = "disabled" if not self.screening_enabled else "idle"
+        if self.screening_enabled and self._scanner_thread is None:
+            self.start_background_screening()
+        return {"screening_enabled": self.screening_enabled, "mailbox": self.screening_account}
 
     def _from_record(self, record: QuarantineRecord, decision: str) -> RiskEvaluateResponse:
         return RiskEvaluateResponse(
@@ -349,6 +361,7 @@ class RiskService:
             false_positive_count=false_positive_count,
             last_scan_at=self.processed_store.latest_timestamp(),
             screening_enabled=self.screening_enabled,
+            gmail_connected_email=resolve_gmail_account_email(),
             scanner_status=self._scanner_state,  # type: ignore[arg-type]
             recent_high_risk=[
                 DashboardRecentItem(
@@ -373,6 +386,7 @@ class RiskService:
             minutes_since=self.screening_minutes_since,
             include_read=True,
             max_results=self.screening_batch_size,
+            inbox_wide=True,
         ).emails
         processed = quarantined = delivered = skipped = 0
 

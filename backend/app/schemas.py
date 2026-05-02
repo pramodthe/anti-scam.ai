@@ -222,5 +222,26 @@ class DashboardSummaryResponse(BaseModel):
     false_positive_count: int = 0
     last_scan_at: str | None = None
     screening_enabled: bool = False
+    gmail_connected_email: str | None = None
     scanner_status: Literal["idle", "running", "disabled"] = "idle"
     recent_high_risk: list[DashboardRecentItem] = Field(default_factory=list)
+
+
+class GmailProfileResponse(BaseModel):
+    email_address: str = ""
+
+
+class GoogleOAuthClientSaveRequest(BaseModel):
+    client_id: str = Field(..., min_length=1, description="Google OAuth Web client ID")
+    client_secret: str = Field(..., min_length=1, description="Google OAuth Web client secret")
+
+
+class GoogleOAuthClientSaveResponse(BaseModel):
+    status: Literal["saved"] = "saved"
+
+
+class GoogleOAuthSetupStatusResponse(BaseModel):
+    has_oauth_client: bool = False
+    has_refresh_token: bool = False
+    connected_email: str | None = None
+    redirect_uri: str = ""

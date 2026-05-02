@@ -38,9 +38,8 @@ uvicorn backend.api:app --reload --port 8000
 ```
 
 ```bash
-cd /Users/pramodthebe/Desktop/websecurity
-source .venv-webapp313/bin/activate
-streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 127.0.0.1
+cd /Users/pramodthebe/Desktop/websecurity/frontend-next
+NEXT_PUBLIC_EMAIL_API_BASE=http://127.0.0.1:8000 npm run dev
 ```
 
 ## API

@@ -1,14 +1,30 @@
-from pathlib import Path
+import json
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 
+from backend.app.gmail_client import gmail_token_path, read_stored_gmail_account
+from backend.app.gmail_oauth_config import load_oauth_client_pair, save_oauth_client
 from backend.app.gmail_service import GmailService
+from backend.app.google_oauth_web import (
+    build_authorization_url,
+    consume_oauth_state,
+    create_oauth_state,
+    exchange_authorization_code,
+    frontend_base_url,
+    oauth_redirect_uri,
+    persist_token_from_code_response,
+)
 from backend.app.risk_agent import RiskService
 from backend.app.schemas import (
     DashboardSummaryResponse,
     DeleteEmailResponse,
+    GmailProfileResponse,
+    GoogleOAuthClientSaveRequest,
+    GoogleOAuthClientSaveResponse,
+    GoogleOAuthSetupStatusResponse,
     LabelRequest,
     LabelResponse,
     LinkEvaluateRequest,
@@ -87,6 +103,88 @@ def delete_email(message_id: str) -> DeleteEmailResponse:
         raise HTTPException(status_code=500, detail=f"Failed to delete email: {exc}") from exc
 
 
+@app.get("/gmail/profile", response_model=GmailProfileResponse)
+def gmail_profile() -> GmailProfileResponse:
+    try:
+        return gmail.get_profile()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read Gmail profile: {exc}") from exc
+
+
+@app.get("/setup/google/status", response_model=GoogleOAuthSetupStatusResponse)
+def google_setup_status() -> GoogleOAuthSetupStatusResponse:
+    cid, csec = load_oauth_client_pair()
+    path = gmail_token_path()
+    has_refresh = False
+    email = read_stored_gmail_account()
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+            has_refresh = bool(data.get("refresh_token"))
+            if not email:
+                acc = (data.get("account") or "").strip()
+                email = acc or None
+        except (json.JSONDecodeError, OSError):
+            pass
+    return GoogleOAuthSetupStatusResponse(
+        has_oauth_client=bool(cid and csec),
+        has_refresh_token=has_refresh,
+        connected_email=email,
+        redirect_uri=oauth_redirect_uri(),
+    )
+
+
+@app.post("/setup/google/oauth-client", response_model=GoogleOAuthClientSaveResponse)
+def google_save_oauth_client(payload: GoogleOAuthClientSaveRequest) -> GoogleOAuthClientSaveResponse:
+    save_oauth_client(payload.client_id, payload.client_secret)
+    return GoogleOAuthClientSaveResponse()
+
+
+@app.get("/auth/google/start")
+def google_oauth_start() -> RedirectResponse:
+    cid, csec = load_oauth_client_pair()
+    if not cid or not csec:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing OAuth client. Save Client ID and Secret on the Setup page first.",
+        )
+    state = create_oauth_state()
+    url = build_authorization_url(client_id=cid, redirect_uri=oauth_redirect_uri(), state=state)
+    return RedirectResponse(url)
+
+
+@app.get("/auth/google/callback")
+def google_oauth_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    base = frontend_base_url()
+    if error:
+        return RedirectResponse(f"{base}/setup?error={quote(error)}")
+    if not code or not state:
+        return RedirectResponse(f"{base}/setup?error={quote('Missing authorization response')}")
+    if not consume_oauth_state(state):
+        return RedirectResponse(f"{base}/setup?error={quote('Login session expired — try Sign in again')}")
+    cid, csec = load_oauth_client_pair()
+    if not cid or not csec:
+        return RedirectResponse(f"{base}/setup?error={quote('OAuth client not configured')}")
+    redirect_uri = oauth_redirect_uri()
+    try:
+        tok = exchange_authorization_code(
+            code=code,
+            client_id=cid,
+            client_secret=csec,
+            redirect_uri=redirect_uri,
+        )
+        email = persist_token_from_code_response(tok, client_id=cid, client_secret=csec)
+    except Exception as exc:
+        return RedirectResponse(f"{base}/setup?error={quote(str(exc))}")
+    risk.refresh_screening_account()
+    suffix = f"&email={quote(email)}" if email else ""
+    return RedirectResponse(f"{base}/setup?connected=1{suffix}")
+
+
 @app.post("/risk/emails/evaluate", response_model=RiskEvaluateResponse)
 def evaluate_email(payload: RiskEvaluateRequest) -> RiskEvaluateResponse:
     try:
@@ -136,6 +234,12 @@ def screening_run_once() -> dict[str, int | str]:
         return risk.screen_inbox_once()
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to run screening: {exc}") from exc
+
+
+@app.post("/screening/reload-account")
+def screening_reload_account() -> dict[str, bool | str]:
+    """Re-read GMAIL_ACCOUNT / token mailbox and enable background screening without restarting the API."""
+    return risk.refresh_screening_account()
 
 
 @app.get("/emails/quarantine", response_model=ListEmailReviewItemsResponse)
@@ -220,8 +324,3 @@ def release_quarantine(message_id: str) -> ReleaseResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to release quarantine: {exc}") from exc
-
-
-FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend" / "web"
-if FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

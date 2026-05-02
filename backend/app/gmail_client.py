@@ -4,28 +4,74 @@ import os
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+
+from backend.app.gmail_oauth_config import load_oauth_client_pair
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def gmail_token_path() -> Path:
+    """Resolved path to Gmail OAuth token JSON (env override or default)."""
+    load_dotenv(_repo_root() / ".env")
+    raw = os.getenv("GMAIL_TOKEN_PATH", "").strip()
+    if raw:
+        p = Path(raw)
+        return p if p.is_absolute() else (_repo_root() / p).resolve()
+    return _repo_root() / ".secrets" / "token.json"
+
+
+def read_stored_gmail_account() -> Optional[str]:
+    """Email stored in token JSON after `setup_gmail.py` (no API call)."""
+    path = gmail_token_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    account = (data.get("account") or "").strip()
+    return account or None
+
+
+def resolve_gmail_account_email() -> Optional[str]:
+    """Effective mailbox address: env overrides, else token `account` field."""
+    load_dotenv(_repo_root() / ".env")
+    for key in ("RISK_SCREENING_ACCOUNT", "GMAIL_ACCOUNT"):
+        v = os.getenv(key, "").strip()
+        if v:
+            return v
+    return read_stored_gmail_account()
 
 
 class GmailClient:
     """Minimal Gmail API client for list/send/delete."""
 
     def __init__(self) -> None:
-        root = Path(__file__).resolve().parents[2]
-        load_dotenv(root / ".env")
-        secrets_dir = root / ".secrets"
-        self._token_path = secrets_dir / "token.json"
+        load_dotenv(_repo_root() / ".env")
+        self._token_path = gmail_token_path()
+
+    def _merge_token_with_env(self, token_data: dict[str, Any]) -> dict[str, Any]:
+        out = dict(token_data)
+        cid, csec = load_oauth_client_pair()
+        if cid:
+            out["client_id"] = cid
+        if csec:
+            out["client_secret"] = csec
+        return out
 
     def _load_credentials(self) -> Credentials:
         env_token = os.getenv("GMAIL_TOKEN")
         if env_token:
-            token_data = json.loads(env_token)
+            token_data = self._merge_token_with_env(json.loads(env_token))
         elif self._token_path.exists():
-            token_data = json.loads(self._token_path.read_text())
+            token_data = self._merge_token_with_env(json.loads(self._token_path.read_text()))
         else:
             raise RuntimeError(
                 "Gmail token not found. Run scripts/setup_gmail.py or set GMAIL_TOKEN in environment."
@@ -66,11 +112,21 @@ class GmailClient:
         return ""
 
     def list_emails(
-        self, email_address: str, minutes_since: int = 1440, include_read: bool = True, max_results: int = 25
+        self,
+        email_address: str,
+        minutes_since: int = 1440,
+        include_read: bool = True,
+        max_results: int = 25,
+        *,
+        inbox_wide: bool = False,
     ) -> list[dict[str, Any]]:
         service = self._gmail_service()
         after = int((datetime.now() - timedelta(minutes=minutes_since)).timestamp())
-        query = f"(to:{email_address} OR from:{email_address}) after:{after}"
+        # Screening uses inbox_wide so CC/list mail and normal inbox traffic are included (not only to:/from: exact match).
+        if inbox_wide:
+            query = f"in:inbox after:{after}"
+        else:
+            query = f"(to:{email_address} OR from:{email_address}) after:{after}"
         if not include_read:
             query += " is:unread"
 
@@ -118,3 +174,8 @@ class GmailClient:
     def delete_email(self, message_id: str) -> None:
         service = self._gmail_service()
         service.users().messages().trash(userId="me", id=message_id).execute()
+
+    def get_profile_email(self) -> str:
+        service = self._gmail_service()
+        profile = service.users().getProfile(userId="me").execute()
+        return str(profile.get("emailAddress") or "")
